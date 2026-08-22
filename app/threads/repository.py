@@ -16,15 +16,33 @@ COLUMNS = "id, title, created_at, updated_at"
 
 
 async def create(pool: AsyncConnectionPool, user_id: UUID, title: str | None) -> dict:
-    # TODO: title 이 None 이면 컬럼을 생략해 DB 기본값('새 대화')이 들어가게 한다.
-    #   INSERT INTO chat_threads (user_id, title) VALUES (%s, %s) RETURNING ...
-    raise NotImplementedError
+    """채팅방을 만들고, DB가 생성한 UUID를 LangGraph thread_id로 돌려준다."""
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cursor:
+            if title is None:
+                await cursor.execute(
+                    f"INSERT INTO chat_threads (user_id) VALUES (%s) RETURNING {COLUMNS}",
+                    (user_id,),
+                )
+            else:
+                await cursor.execute(
+                    f"INSERT INTO chat_threads (user_id, title) VALUES (%s, %s) "
+                    f"RETURNING {COLUMNS}",
+                    (user_id, title),
+                )
+            return await cursor.fetchone()
 
 
 async def list_by_user(pool: AsyncConnectionPool, user_id: UUID) -> list[dict]:
-    # TODO: WHERE user_id = %s ORDER BY updated_at DESC
-    #       idx_chat_threads_user_updated 인덱스가 이 질의를 커버한다.
-    raise NotImplementedError
+    """현재 사용자의 채팅방을 최근 활동 순으로 조회한다."""
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                f"SELECT {COLUMNS} FROM chat_threads "
+                "WHERE user_id = %s ORDER BY updated_at DESC",
+                (user_id,),
+            )
+            return await cursor.fetchall()
 
 
 async def get_owned(
