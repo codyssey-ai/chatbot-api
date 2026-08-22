@@ -42,13 +42,25 @@ async def save_error(
     error_message: str,
 ) -> int:
     """실패한 호출도 기록한다. answer 는 NULL 로 둔다."""
-    # TODO: INSERT INTO chat_logs
-    #         (thread_id, user_id, question, answer, status, error_message)
-    #       VALUES (%s, %s, %s, NULL, 'error', %s) RETURNING id
-    raise NotImplementedError
+    async with pool.connection() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute(
+                "INSERT INTO chat_logs "
+                "(thread_id, user_id, question, answer, status, error_message) "
+                "VALUES (%s, %s, %s, NULL, 'error', %s) RETURNING id",
+                (thread_id, user_id, question, error_message),
+            )
+            row = await cursor.fetchone()
+            return row[0]
 
 
 async def list_by_thread(pool: AsyncConnectionPool, thread_id: UUID) -> list[dict]:
     """대화 내역을 시간순으로 돌려준다. 화면 복구에 쓴다."""
-    # TODO: WHERE thread_id = %s ORDER BY created_at
-    raise NotImplementedError
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                "SELECT id, question, answer, status, created_at "
+                "FROM chat_logs WHERE thread_id = %s ORDER BY created_at ASC",
+                (thread_id,),
+            )
+            return await cursor.fetchall()
