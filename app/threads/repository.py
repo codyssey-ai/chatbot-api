@@ -53,15 +53,28 @@ async def get_owned(
     라우터는 None 을 받으면 403 이 아니라 404 로 응답한다.
     403 을 주면 그 ID 의 thread 가 존재한다는 사실이 노출된다.
     """
-    # TODO: WHERE id = %s AND user_id = %s
-    raise NotImplementedError
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                f"SELECT {COLUMNS} FROM chat_threads "
+                "WHERE id = %s AND user_id = %s",
+                (thread_id, user_id),
+            )
+            return await cursor.fetchone()
 
 
 async def update_title(
     pool: AsyncConnectionPool, thread_id: UUID, user_id: UUID, title: str
 ) -> dict | None:
-    # TODO: UPDATE ... WHERE id = %s AND user_id = %s RETURNING ...
-    raise NotImplementedError
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                f"UPDATE chat_threads SET title = %s "
+                "WHERE id = %s AND user_id = %s "
+                f"RETURNING {COLUMNS}",
+                (title, thread_id, user_id),
+            )
+            return await cursor.fetchone()
 
 
 async def delete(pool: AsyncConnectionPool, thread_id: UUID, user_id: UUID) -> bool:
