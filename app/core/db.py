@@ -7,7 +7,7 @@ LangGraph 체크포인터도 같은 풀을 사용한다.
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 
-from app.config import settings
+from app.core.config import settings
 
 # LangGraph 가 checkpointer.setup() 에서 직접 만드는 테이블들.
 # 우리 schema.sql 이 닿지 않으므로 여기서 따로 다룬다.

@@ -126,6 +126,36 @@ curl -i -X POST localhost:8000/api/threads \
 
 ---
 
+## 프로젝트 구조
+
+기능별로 폴더를 나눠 담당자가 폴더 단위로 소유할 수 있게 했다.
+한 기능을 고칠 때 그 폴더 안에서 끝나므로 여러 명이 동시에 작업해도 충돌이 적다.
+
+```
+app/
+├─ main.py        진입점. lifespan 에서 풀·체크포인터·에이전트를 조립한다
+├─ core/          설정, DB 풀, 로깅, 미들웨어, 예외, 전역 의존성
+├─ auth/          회원가입·로그인·토큰 검증
+├─ threads/       채팅방 CRUD
+├─ chat/          메시지 전송, LangGraph 에이전트, 프롬프트
+└─ web/           Jinja2 화면 라우터
+
+templates/        base / login / signup / chat
+static/           style.css, chat.js
+scripts/          schema.sql, check_logs.sql, render-diagrams.sh
+docs/             architecture.md, API_SPEC.md, 다이어그램
+```
+
+각 기능 폴더는 같은 역할 구분을 따른다.
+
+| 파일 | 역할 |
+|---|---|
+| `router.py` | HTTP 계층. 요청을 받고 응답을 만든다 |
+| `schemas.py` | 요청/응답 모델과 입력 검증 |
+| `service.py` | 비즈니스 로직. 소유권 확인 등 여러 단계를 조립한다 |
+| `repository.py` | SQL. DB 접근은 이 파일에만 둔다 |
+| `deps.py` | 해당 기능의 의존성 |
+
 ## 시스템 구조
 
 ![배포 구성도](docs/images/01-deployment.png)

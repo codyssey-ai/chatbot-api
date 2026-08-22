@@ -17,13 +17,16 @@ os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: E402
 from supabase import create_client  # noqa: E402
 
-from app.agent import build_agent  # noqa: E402
-from app.config import settings  # noqa: E402
-from app.db import create_pool, ping, secure_checkpoint_tables  # noqa: E402
-from app.errors import register_error_handlers  # noqa: E402
-from app.logging_config import log_event, setup_logging  # noqa: E402
-from app.middleware import RequestContextMiddleware  # noqa: E402
-from app.routers import auth, pages, threads  # noqa: E402
+from app.auth import router as auth_router  # noqa: E402
+from app.chat import router as chat_router  # noqa: E402
+from app.chat.agent import build_agent  # noqa: E402
+from app.core.config import settings  # noqa: E402
+from app.core.db import create_pool, ping, secure_checkpoint_tables  # noqa: E402
+from app.core.errors import register_error_handlers  # noqa: E402
+from app.core.logging import log_event, setup_logging  # noqa: E402
+from app.core.middleware import RequestContextMiddleware  # noqa: E402
+from app.threads import router as threads_router  # noqa: E402
+from app.web import router as web_router  # noqa: E402
 
 
 @asynccontextmanager
@@ -62,9 +65,10 @@ register_error_handlers(app)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-app.include_router(pages.router)
-app.include_router(auth.router)
-app.include_router(threads.router)
+app.include_router(web_router.router)
+app.include_router(auth_router.router)
+app.include_router(threads_router.router)
+app.include_router(chat_router.router)
 
 
 @app.get("/health", tags=["ops"])
