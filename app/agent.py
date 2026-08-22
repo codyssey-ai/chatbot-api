@@ -67,8 +67,13 @@ Conversation Context Compressor
 
 def build_agent(checkpointer):
     """체크포인터를 물린 에이전트를 만든다. lifespan 에서 한 번만 호출한다."""
-    main_model = init_chat_model(settings.model_name, temperature=0)
-    summary_model = init_chat_model(settings.model_name, temperature=0)
+    # api_key 를 명시적으로 넘긴다.
+    # pydantic-settings 는 .env 를 Settings 객체로만 읽고 os.environ 에 넣지 않는데,
+    # langchain_openai 는 환경 변수를 직접 읽기 때문에 그냥 두면 인증에 실패한다.
+    model_kwargs = {"temperature": 0, "api_key": settings.openai_api_key}
+
+    main_model = init_chat_model(settings.model_name, **model_kwargs)
+    summary_model = init_chat_model(settings.model_name, **model_kwargs)
 
     return create_agent(
         model=main_model,
