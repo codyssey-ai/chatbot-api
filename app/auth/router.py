@@ -1,20 +1,19 @@
 """인증 라우터.
 
-TODO(인증 담당): signup / login 본문 구현. 실제 호출은 service.py 에 있다.
-
 동작 방식
     Jinja2 폼 → 여기 → Supabase Auth → JWT 수신 → HttpOnly 쿠키로 발급
 
-주의
-    - 토큰을 응답 본문에 담지 않는다. 쿠키에만 넣는다.
-    - 배포 환경에서는 COOKIE_SECURE=true 로 두어 Secure 플래그를 켠다.
+토큰은 응답 본문에 담지 않는다. 쿠키에만 넣어 JavaScript 가 읽지 못하게 한다.
 """
 
 from fastapi import APIRouter, Depends, Response
 
+from app.auth import service
 from app.auth.deps import ACCESS_TOKEN_COOKIE, CurrentUser, get_current_user
 from app.auth.schemas import LoginRequest, SignupRequest, UserResponse
+from app.core.config import settings
 from app.core.deps import get_supabase
+from app.core.logging import log_event
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -24,9 +23,9 @@ async def signup(
     body: SignupRequest,
     client=Depends(get_supabase),
 ) -> UserResponse:
-    # TODO: user = await service.sign_up(client, body.email, body.password)
-    #       return UserResponse(id=user.id, email=user.email)
-    raise NotImplementedError
+    user = await service.sign_up(client, body.email, body.password)
+    log_event("signup_success", user_id=user.id)
+    return UserResponse(id=user.id, email=user.email)
 
 
 @router.post("/auth/login")
@@ -35,22 +34,27 @@ async def login(
     response: Response,
     client=Depends(get_supabase),
 ) -> UserResponse:
-    # TODO: session = await service.sign_in(client, body.email, body.password)
-    #       response.set_cookie(
-    #           ACCESS_TOKEN_COOKIE,
-    #           session.access_token,
-    #           httponly=True,
-    #           secure=settings.cookie_secure,
-    #           samesite="lax",
-    #           max_age=session.expires_in,
-    #       )
-    #       return UserResponse(id=session.user.id, email=session.user.email)
-    raise NotImplementedError
+    session = await service.sign_in(client, body.email, body.password)
+
+    response.set_cookie(
+        ACCESS_TOKEN_COOKIE,
+        session.access_token,
+        httponly=True,                    # JavaScript 접근 차단
+        secure=settings.cookie_secure,     # 배포(HTTPS)에서는 true
+        samesite="lax",
+        max_age=session.expires_in,
+        path="/",
+    )
+
+    log_event("login_success", user_id=session.user.id)
+    return UserResponse(id=session.user.id, email=session.user.email)
 
 
 @router.post("/auth/logout", status_code=204)
 async def logout(response: Response) -> None:
-    response.delete_cookie(ACCESS_TOKEN_COOKIE)
+    # 쿠키를 지운다. 토큰 자체는 만료 시각까지 유효하지만 브라우저가 더는 보내지 않는다.
+    response.delete_cookie(ACCESS_TOKEN_COOKIE, path="/")
+    log_event("logout")
 
 
 @router.get("/me")
