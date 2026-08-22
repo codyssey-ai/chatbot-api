@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: E402
-from supabase import create_client  # noqa: E402
+from supabase import AsyncClientOptions, create_async_client  # noqa: E402
 
 from app.auth import router as auth_router  # noqa: E402
 from app.chat import router as chat_router  # noqa: E402
@@ -45,9 +45,18 @@ async def lifespan(app: FastAPI):
     app.state.pool = pool
     app.state.checkpointer = checkpointer
     app.state.agent = build_agent(checkpointer)
-    app.state.supabase = create_client(
+    # 동기 클라이언트는 네트워크 호출이 이벤트 루프를 막으므로 async 로 만든다.
+    #
+    # 클라이언트 하나를 모든 요청이 공유한다. 세션을 클라이언트에 저장하면
+    # 마지막에 로그인한 사용자의 세션이 남아 다른 요청에 섞일 수 있으므로 끈다.
+    # 사용자 식별은 항상 요청 쿠키의 토큰을 get_user(token) 에 넘겨서 한다.
+    app.state.supabase = await create_async_client(
         settings.supabase_url,
         settings.supabase_anon_key,
+        options=AsyncClientOptions(
+            auto_refresh_token=False,
+            persist_session=False,
+        ),
     )
 
     log_event("startup_complete", model=settings.model_name)
