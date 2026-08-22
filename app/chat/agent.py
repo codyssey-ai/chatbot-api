@@ -10,6 +10,7 @@
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
 from app.chat.prompts import SUMMARY_PROMPT, SYSTEM_PROMPT
@@ -32,12 +33,35 @@ def build_openai_model() -> ChatOpenAI:
     )
 
 
+def build_gemini_model() -> ChatGoogleGenerativeAI:
+    """명시적으로 선택한 경우에만 Gemini 모델 인스턴스를 만든다."""
+    if not settings.gemini_api_key:
+        raise ValueError("GEMINI_API_KEY가 설정되어 있지 않습니다.")
+
+    return ChatGoogleGenerativeAI(
+        model=settings.gemini_model_name,
+        temperature=0,
+        api_key=settings.gemini_api_key,
+        request_timeout=settings.gemini_timeout_seconds,
+        retries=0,
+    )
+
+
+def build_model(provider: str):
+    """설정에서 명시한 공급자의 역할별 모델을 만든다."""
+    if provider == "openai":
+        return build_openai_model()
+    if provider == "gemini":
+        return build_gemini_model()
+    raise ValueError(f"지원하지 않는 모델 공급자입니다: {provider}")
+
+
 def build_agent(checkpointer):
     """체크포인터를 물린 에이전트를 만든다. lifespan 에서 한 번만 호출한다."""
     # 기본 상태에서는 main과 summary 모두 OpenAI를 쓴다.
-    # 독립 인스턴스로 만들어 이후 summary만 Gemini로 전환할 수 있게 한다.
-    main_model = build_openai_model()
-    summary_model = build_openai_model()
+    # 환경 변수로 명시한 역할만 Gemini로 전환할 수 있다.
+    main_model = build_model(settings.main_model_provider)
+    summary_model = build_model(settings.summary_model_provider)
 
     return create_agent(
         model=main_model,
