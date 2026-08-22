@@ -1,0 +1,21 @@
+flowchart LR
+    subgraph client["사용자"]
+        B["브라우저<br/>Jinja2 템플릿 + fetch"]
+    end
+
+    subgraph render["Render · 무료 Web Service"]
+        direction TB
+        TLS["HTTPS 종료<br/>xxx.onrender.com"]
+        API["FastAPI / uvicorn<br/>SessionMiddleware"]
+        TLS --> API
+    end
+
+    subgraph supa["Supabase · 무료 PostgreSQL"]
+        DB[("users<br/>conversations<br/>messages")]
+    end
+
+    AI["Anthropic API"]
+
+    B -->|"HTTPS · 세션 쿠키"| TLS
+    API -->|"SQLAlchemy<br/>Connection Pooler"| DB
+    API -->|"HTTPS · timeout 20s"| AI
