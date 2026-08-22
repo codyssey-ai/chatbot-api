@@ -6,7 +6,7 @@ import uuid
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from app.logging_config import log_event, request_id_ctx
+from app.core.logging import log_event, request_id_ctx
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):

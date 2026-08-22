@@ -8,7 +8,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.logging_config import log_event, request_id_ctx
+from app.core.logging import log_event, request_id_ctx
 
 
 class AppError(Exception):

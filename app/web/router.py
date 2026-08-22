@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.dependencies import ACCESS_TOKEN_COOKIE
+from app.auth.deps import ACCESS_TOKEN_COOKIE
 
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory="templates")
