@@ -10,21 +10,34 @@
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
-from langchain.chat_models import init_chat_model
+from langchain_openai import ChatOpenAI
 
 from app.chat.prompts import SUMMARY_PROMPT, SYSTEM_PROMPT
 from app.core.config import settings
 
 
+def build_openai_model() -> ChatOpenAI:
+    """기본 OpenAI 모델 인스턴스를 만든다.
+
+    main과 summary는 같은 공급자를 쓰더라도 인스턴스를 공유하지 않는다.
+    이후 한쪽만 다른 공급자로 전환해도 서로의 설정에 영향을 주지 않는다.
+    """
+    return ChatOpenAI(
+        model=settings.openai_model_name,
+        temperature=0,
+        api_key=settings.openai_api_key,
+        timeout=settings.openai_timeout_seconds,
+        # 재시도 대신 명시적인 Gemini 폴백으로 장애를 처리한다.
+        max_retries=0,
+    )
+
+
 def build_agent(checkpointer):
     """체크포인터를 물린 에이전트를 만든다. lifespan 에서 한 번만 호출한다."""
-    # api_key 를 명시적으로 넘긴다.
-    # pydantic-settings 는 .env 를 Settings 객체로만 읽고 os.environ 에 넣지 않는데,
-    # langchain_openai 는 환경 변수를 직접 읽기 때문에 그냥 두면 인증에 실패한다.
-    model_kwargs = {"temperature": 0, "api_key": settings.openai_api_key}
-
-    main_model = init_chat_model(settings.model_name, **model_kwargs)
-    summary_model = init_chat_model(settings.model_name, **model_kwargs)
+    # 기본 상태에서는 main과 summary 모두 OpenAI를 쓴다.
+    # 독립 인스턴스로 만들어 이후 summary만 Gemini로 전환할 수 있게 한다.
+    main_model = build_openai_model()
+    summary_model = build_openai_model()
 
     return create_agent(
         model=main_model,
