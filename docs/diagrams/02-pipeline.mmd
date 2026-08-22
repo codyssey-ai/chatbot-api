@@ -1,0 +1,5 @@
+flowchart LR
+    Dev["팀원"] -->|"PR 머지"| GH["GitHub · main"]
+    GH -->|"Auto Deploy"| R["Render"]
+    CR["GitHub Actions<br/>cron · 매일 1회"] -->|"GET /health"| R
+    R -->|"SELECT 1"| S["Supabase"]

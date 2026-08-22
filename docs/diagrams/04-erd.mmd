@@ -1,0 +1,25 @@
+erDiagram
+    users ||--o{ conversations : "소유"
+    conversations ||--o{ messages : "포함"
+
+    users {
+        int id PK
+        string username UK
+        string password_hash
+        datetime created_at
+    }
+    conversations {
+        int id PK
+        int user_id FK
+        string title
+        datetime created_at
+    }
+    messages {
+        int id PK
+        int conversation_id FK
+        string role "user 또는 assistant"
+        text content
+        int latency_ms "AI 응답 소요 시간"
+        string error_code "실패 시 사유"
+        datetime created_at
+    }
