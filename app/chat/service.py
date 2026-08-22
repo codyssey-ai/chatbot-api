@@ -34,21 +34,15 @@ async def send_message(
     log_event("ai_call_start", thread_id=thread_id)
     started = time.perf_counter()
 
-    # TODO: 아래 호출을 감싸 타임아웃과 예외를 처리한다.
-    #
-    #   result = await agent.ainvoke(
-    #       {"messages": [{"role": "user", "content": question}]},
-    #       config={"configurable": {"thread_id": str(thread_id)}},
-    #   )
-    #   answer = result["messages"][-1].content
-    #
-    # 실패 시 repository.save_error() 로 기록한 뒤
-    # AITimeout / AIUpstreamError 를 던진다.
-    #
-    # 주의: 요약이 트리거된 턴은 LLM 을 두 번 호출한다(요약 + 본 응답).
-    # 전체를 단일 타임아웃으로 묶으면 그 턴마다 실패할 수 있다.
-    # docs/API_SPEC.md 12.1 참고.
-    raise NotImplementedError
+    # 과거 대화는 직접 다시 조립하지 않는다. 같은 thread_id를 넘기면
+    # AsyncPostgresSaver가 이전 State를 복구한다.
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": question}]},
+        config={"configurable": {"thread_id": str(thread_id)}},
+    )
+    answer = result["messages"][-1].content
+    if not isinstance(answer, str):
+        answer = str(answer)
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     log_event("ai_call_success", latency_ms=latency_ms)
