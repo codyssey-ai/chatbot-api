@@ -21,10 +21,16 @@ async def save_success(
     latency_ms: int,
 ) -> int:
     """성공한 문답을 기록하고 id 를 돌려준다."""
-    # TODO: INSERT INTO chat_logs
-    #         (thread_id, user_id, question, answer, status, latency_ms)
-    #       VALUES (%s, %s, %s, %s, 'success', %s) RETURNING id
-    raise NotImplementedError
+    async with pool.connection() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute(
+                "INSERT INTO chat_logs "
+                "(thread_id, user_id, question, answer, status, latency_ms) "
+                "VALUES (%s, %s, %s, %s, 'success', %s) RETURNING id",
+                (thread_id, user_id, question, answer, latency_ms),
+            )
+            row = await cursor.fetchone()
+            return row[0]
 
 
 async def save_error(
