@@ -19,7 +19,7 @@ from supabase import create_client  # noqa: E402
 
 from app.agent import build_agent  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.db import create_pool, ping  # noqa: E402
+from app.db import create_pool, ping, secure_checkpoint_tables  # noqa: E402
 from app.errors import register_error_handlers  # noqa: E402
 from app.logging_config import log_event, setup_logging  # noqa: E402
 from app.middleware import RequestContextMiddleware  # noqa: E402
@@ -36,6 +36,8 @@ async def lifespan(app: FastAPI):
     checkpointer = AsyncPostgresSaver(pool)
     # 체크포인트 테이블을 만든다. 이미 있으면 아무 일도 하지 않는다.
     await checkpointer.setup()
+    # 방금 만들어진 테이블은 RLS 가 꺼진 상태다. 바로 막는다.
+    await secure_checkpoint_tables(pool)
 
     app.state.pool = pool
     app.state.checkpointer = checkpointer
