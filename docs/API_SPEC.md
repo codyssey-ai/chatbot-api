@@ -270,7 +270,9 @@ LangGraph 체크포인터는 대화 스텝마다 State 스냅샷을 기록하므
 
 ---
 
-## 5. Context 관리
+## 5. Context 관리 및 AI 에이전트 구성
+
+### 5.1 Context 흐름
 
 ```text
 현재 질문
@@ -311,6 +313,156 @@ result = await agent.ainvoke(
 
 `chat_logs` 는 컨텍스트 관리용이 **아니다.** 미들웨어가 오래된 메시지를 압축하더라도
 `chat_logs` 의 원본은 그대로 유지된다.
+
+### 5.2 패키지
+
+```text
+langchain>=1.3,<2
+langgraph>=1.0,<2
+langgraph-checkpoint-postgres      # 초안의 langgraph-checkpoint-sqlite 대체
+langchain-openai>=1.0
+psycopg[binary,pool]>=3.2          # 초안의 aiosqlite 대체
+python-dotenv
+```
+
+`LANGGRAPH_STRICT_MSGPACK=true` 를 설정한다. 체크포인트 역직렬화 시 허용되지 않은
+타입이 들어오는 것을 막는다.
+
+### 5.3 에이전트 구성
+
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
+from langchain.chat_models import init_chat_model
+
+SYSTEM_PROMPT = (
+    "너는 간결하고 정확한 AI 어시스턴트다. "
+    "이전 대화의 결정사항과 제약조건을 일관되게 유지한다."
+)
+
+
+def build_agent(checkpointer):
+    main_model = init_chat_model(settings.MODEL_NAME, temperature=0)
+    summary_model = init_chat_model(settings.MODEL_NAME, temperature=0)
+
+    return create_agent(
+        model=main_model,
+        tools=[],
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[
+            SummarizationMiddleware(
+                model=summary_model,
+                trigger=("tokens", settings.SUMMARY_TRIGGER_TOKENS),
+                keep=("tokens", settings.SUMMARY_KEEP_TOKENS),
+                summary_prompt=SUMMARY_PROMPT,
+            )
+        ],
+        checkpointer=checkpointer,
+        name="main_agent",
+    )
+```
+
+`create_agent()` 는 compiled graph 를 반환한다. 따라서 `agent.get_state(config)` 로
+특정 thread 의 현재 State 를 확인할 수 있고, 나중에 상위 `StateGraph` 의 subgraph 로
+넣어 멀티 에이전트로 확장할 수도 있다.
+
+### 5.4 요약 기준
+
+| 기준 | 설정 | 용도 |
+|---|---|---|
+| 메시지 수 | `trigger=("messages", 6)`, `keep=("messages", 4)` | 데모·디버깅 |
+| **토큰 수** | `trigger=("tokens", 8000)`, `keep=("tokens", 4000)` | **운영** |
+| 비율 | `trigger=("fraction", 0.8)`, `keep=("fraction", 0.4)` | 모델 context window 기준 |
+
+운영에서는 **토큰 기준을 쓴다.** tool call 이나 멀티 에이전트가 들어가면
+"최근 N개 메시지 = N/2 턴"이 성립하지 않기 때문이다.
+
+요약이 동작하는지 눈으로 확인하려면 `trigger=("messages", 6)` 처럼 임계값을 낮춰
+빠르게 트리거되게 한 뒤 `agent.get_state()` 로 State 를 들여다보면 된다.
+
+### 5.5 요약 프롬프트
+
+`{messages}` 플레이스홀더와 `<messages>` 블록은 **반드시 유지한다.**
+
+```text
+<role>
+Conversation Context Compressor
+</role>
+
+<instructions>
+아래 과거 대화를 이후 대화를 이어가는 데 필요한 정보만 남기도록 압축하라.
+
+반드시 보존:
+- 사용자의 현재 목표
+- 이미 결정된 사항
+- 사용자가 명시한 제약조건
+- 중요한 기술명, 수치, 고유명사
+- 현재 진행 중인 작업
+- 아직 해결되지 않은 질문
+
+제외:
+- 인사말
+- 반복 설명
+- 이미 의미가 없어진 중간 대화
+- 불필요한 표현
+
+가능하면 아래 형식을 사용하라.
+
+## GOAL
+## DECISIONS
+## CONSTRAINTS
+## OPEN ITEMS
+
+요약 결과만 반환하라.
+</instructions>
+
+<messages>
+{messages}
+</messages>
+```
+
+압축이 일어나면 State 의 첫 메시지가 이 형식의 요약본으로 바뀌고,
+그 뒤로 최근 메시지 원문이 이어진다.
+
+### 5.6 lifespan 에서 조립
+
+체크포인터와 에이전트는 요청마다 만들지 않고 애플리케이션 수명 동안 한 번만 만든다.
+
+```python
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from psycopg_pool import AsyncConnectionPool
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    pool = AsyncConnectionPool(
+        conninfo=settings.DATABASE_URL,
+        min_size=1,
+        max_size=5,
+        kwargs={"autocommit": True, "prepare_threshold": None},
+        open=False,
+    )
+    await pool.open()
+
+    checkpointer = AsyncPostgresSaver(pool)
+    await checkpointer.setup()
+
+    app.state.checkpointer = checkpointer
+    app.state.agent = build_agent(checkpointer)
+    try:
+        yield
+    finally:
+        await pool.close()
+
+
+app = FastAPI(lifespan=lifespan)
+```
+
+라우터에서는 `request.app.state.agent` 로 꺼내 쓴다.
+초안 노트북의 `AsyncSqliteSaver.from_conn_string("app.db")` 를 대체하는 부분이다.
 
 ---
 
@@ -571,7 +723,9 @@ Streamlit 은 인터랙션마다 스크립트를 위에서부터 재실행한다
 
 | 항목 | SQLite 초안 | Supabase (현재) |
 |---|---|---|
-| 체크포인터 | `SqliteSaver` | `AsyncPostgresSaver` |
+| 체크포인터 | `SqliteSaver` / `AsyncSqliteSaver` | `AsyncPostgresSaver` |
+| 체크포인터 패키지 | `langgraph-checkpoint-sqlite` | `langgraph-checkpoint-postgres` |
+| DB 드라이버 | `aiosqlite` | `psycopg[binary,pool]` |
 | 자동 증가 PK | `INTEGER PRIMARY KEY AUTOINCREMENT` | `BIGSERIAL PRIMARY KEY` |
 | Thread ID | `TEXT` | `UUID` (`gen_random_uuid()`) |
 | 시각 타입 | `DATETIME` | `TIMESTAMPTZ` |
@@ -612,15 +766,18 @@ POST /api/auth/login  →  { "access_token": "..." }
 이 경우 브라우저 새로고침 시 토큰이 사라지는 문제가 남으므로,
 쿠키 저장을 위한 별도 처리가 필요하다.
 
-### 12.2 AI 에이전트 구성
+### 12.2 AI 호출 타임아웃
 
-`create_agent` 구성, `SummarizationMiddleware` 파라미터, 모델 지정, 타임아웃 설정은
-AI 담당자의 노트북 내용을 확인한 뒤 이 문서에 반영한다.
+`create_agent` 구성과 미들웨어 설정은 5장에 반영했다. 다만 타임아웃 처리는 아직 정하지 않았다.
 
-현재 확정된 것은 아래 두 가지뿐이다.
+`agent.ainvoke()` 는 내부적으로 요약 호출과 본 응답 호출을 **각각 수행**하므로,
+요약이 트리거된 턴은 평소보다 오래 걸린다. 단순히 전체를 20초로 묶으면 요약이 도는 턴마다
+타임아웃이 날 수 있다. 아래 중 하나를 택한다.
 
-- 최근 4개 메시지는 원문 유지, 그 이전은 요약
-- 체크포인터는 `AsyncPostgresSaver`
+1. 모델 클라이언트 레벨에서 `timeout` 을 지정하고, 전체는 넉넉히 잡는다
+2. `asyncio.wait_for()` 로 전체를 감싸되 요약 발생을 감안해 여유를 둔다
+
+어느 쪽이든 실패 시 `chat_logs.status = 'error'` 기록과 504 응답은 동일하다.
 
 ---
 
@@ -628,11 +785,16 @@ AI 담당자의 노트북 내용을 확인한 뒤 이 문서에 반영한다.
 
 | 키 | 설명 |
 |---|---|
-| `ANTHROPIC_API_KEY` | AI API 인증 키 |
+| `OPENAI_API_KEY` | LLM API 인증 키 |
+| `MODEL_NAME` | 모델 식별자. 예: `openai:gpt-4.1-mini` |
 | `DATABASE_URL` | Supabase PostgreSQL 연결 문자열 (Pooler Session 모드) |
-| `AI_MODEL` | 사용할 모델 이름 |
+| `LANGGRAPH_STRICT_MSGPACK` | 체크포인트 역직렬화 타입 제한. `true` 로 둔다 |
+| `SUMMARY_TRIGGER_TOKENS` | 요약을 시작할 토큰 임계값 (기본 8000) |
+| `SUMMARY_KEEP_TOKENS` | 원문으로 유지할 토큰 수 (기본 4000) |
 | `AI_TIMEOUT_SECONDS` | AI 호출 타임아웃 |
-| `SUMMARY_KEEP_MESSAGES` | 원문으로 유지할 최근 메시지 수 (기본 4) |
 | `LOG_LEVEL` | 로그 레벨 |
+
+`init_chat_model()` 은 `MODEL_NAME` 의 접두어(`openai:`)로 공급자를 판별한다.
+공급자를 바꾸려면 `MODEL_NAME` 과 해당 SDK 패키지, API 키 환경 변수를 함께 교체한다.
 
 인증 방식이 확정되면 `SESSION_SECRET` 또는 `JWT_SECRET` 이 추가된다.
