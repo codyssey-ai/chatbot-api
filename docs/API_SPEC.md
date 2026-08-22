@@ -767,6 +767,18 @@ ALTER TABLE public.chat_logs    ENABLE ROW LEVEL SECURITY;
 즉 **접근 제어의 주체는 FastAPI 의 소유권 확인**이고, RLS 는 외부 직접 접근을 막는
 차단벽 역할만 한다. 정책을 세밀하게 작성해 로직을 두 군데로 나누지는 않는다.
 
+**LangGraph 체크포인트 테이블에도 똑같이 적용한다.** 오히려 이쪽이 더 중요하다.
+`checkpoint_blobs` 에는 대화 메시지 State 가 그대로 들어가기 때문이다.
+
+이 테이블들은 `checkpointer.setup()` 이 만들기 때문에 `scripts/schema.sql` 로는
+다룰 수 없다. 그래서 애플리케이션이 시작할 때 `secure_checkpoint_tables()` 가
+`setup()` 직후에 RLS 를 켠다. LangGraph 마이그레이션이 테이블을 다시 만들 수 있으므로
+매 시작마다 실행한다.
+
+```text
+checkpoints  checkpoint_writes  checkpoint_blobs  checkpoint_migrations
+```
+
 여기에 더해 **Supabase 서비스 키가 클라이언트로 나가지 않아야 한다.** 브라우저는
 우리 FastAPI 만 호출하고, Supabase 와의 통신은 전부 서버에서 일어난다.
 
