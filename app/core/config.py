@@ -1,6 +1,7 @@
 """환경 변수 로딩. 값은 .env 에서 읽고, 키 목록은 .env.example 을 기준으로 한다."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Literal
 
 
 class Settings(BaseSettings):
@@ -14,6 +15,13 @@ class Settings(BaseSettings):
     # LLM
     openai_api_key: str
     model_name: str = "openai:gpt-4.1-mini"
+    gemini_api_key: str = ""
+    openai_model_name: str = "gpt-4.1-mini"
+    gemini_model_name: str = "gemini-2.5-flash"
+    main_model_provider: Literal["openai", "gemini"] = "openai"
+    summary_model_provider: Literal["openai", "gemini"] = "openai"
+    openai_timeout_seconds: int = 18
+    gemini_timeout_seconds: int = 20
     ai_timeout_seconds: int = 60
     summary_trigger_tokens: int = 8000
     summary_keep_tokens: int = 4000
