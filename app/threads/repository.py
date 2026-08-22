@@ -82,5 +82,10 @@ async def delete(pool: AsyncConnectionPool, thread_id: UUID, user_id: UUID) -> b
 
     LangGraph 체크포인트는 CASCADE 대상이 아니다. 서비스 계층에서 따로 지운다.
     """
-    # TODO: DELETE FROM chat_threads WHERE id = %s AND user_id = %s
-    raise NotImplementedError
+    async with pool.connection() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute(
+                "DELETE FROM chat_threads WHERE id = %s AND user_id = %s RETURNING id",
+                (thread_id, user_id),
+            )
+            return await cursor.fetchone() is not None

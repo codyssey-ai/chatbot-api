@@ -23,7 +23,7 @@ class FakeCursor:
         self.params = params
 
     async def fetchone(self):
-        return self.rows[0]
+        return self.rows[0] if self.rows else None
 
     async def fetchall(self):
         return self.rows
@@ -39,7 +39,7 @@ class FakeConnection:
     async def __aexit__(self, *args):
         return None
 
-    def cursor(self, *, row_factory):
+    def cursor(self, *, row_factory=None):
         self.fake_cursor.row_factory = row_factory
         return self.fake_cursor
 
@@ -108,3 +108,17 @@ async def test_update_title_checks_ownership_before_returning_thread() -> None:
     assert "UPDATE chat_threads SET title = %s" in cursor.query
     assert "WHERE id = %s AND user_id = %s" in cursor.query
     assert cursor.params == ("새 제목", thread_id, user_id)
+
+
+@pytest.mark.asyncio
+async def test_delete_checks_ownership_and_returns_deletion_state() -> None:
+    user_id = uuid4()
+    thread_id = uuid4()
+    cursor = FakeCursor([{"id": thread_id}])
+
+    deleted = await repository.delete(FakePool(cursor), thread_id, user_id)
+
+    assert deleted is True
+    assert "DELETE FROM chat_threads" in cursor.query
+    assert "WHERE id = %s AND user_id = %s" in cursor.query
+    assert cursor.params == (thread_id, user_id)
