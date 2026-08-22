@@ -7,14 +7,14 @@
 ## 1. 시스템 구성
 
 ```text
-Streamlit
+브라우저 (Jinja2 템플릿 + fetch)
     │
-    │ REST API
+    │ HTTPS · HttpOnly 쿠키
     ▼
 FastAPI (async)
     │
     ├── Authentication
-    │      └── users
+    │      └── Supabase Auth (auth.users)
     │
     ├── Chat API
     │      ├── chat_threads
@@ -36,7 +36,7 @@ FastAPI (async)
 
 | 구성 | 역할 |
 |---|---|
-| `users` | 사용자 인증 및 식별 |
+| `auth.users` | 사용자 인증 및 식별. **Supabase Auth 가 관리** |
 | `chat_threads` | 사용자별 채팅방 관리 |
 | `chat_logs` | 전체 질문/응답 원본 저장 |
 | `AsyncPostgresSaver` | LangGraph State 저장 및 복구 |
@@ -54,20 +54,19 @@ FastAPI (async)
 
 ```mermaid
 erDiagram
-    USERS ||--o{ CHAT_THREADS : owns
-    USERS ||--o{ CHAT_LOGS : writes
+    AUTH_USERS ||--o{ CHAT_THREADS : owns
+    AUTH_USERS ||--o{ CHAT_LOGS : writes
     CHAT_THREADS ||--o{ CHAT_LOGS : contains
 
-    USERS {
-        BIGSERIAL id PK
-        TEXT username UK
-        TEXT password_hash
+    AUTH_USERS {
+        UUID id PK "Supabase Auth 관리"
+        TEXT email
         TIMESTAMPTZ created_at
     }
 
     CHAT_THREADS {
         UUID id PK
-        BIGINT user_id FK
+        UUID user_id FK
         TEXT title
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
@@ -76,7 +75,7 @@ erDiagram
     CHAT_LOGS {
         BIGSERIAL id PK
         UUID thread_id FK
-        BIGINT user_id FK
+        UUID user_id FK
         TEXT question
         TEXT answer
         TEXT status
@@ -85,6 +84,9 @@ erDiagram
         TIMESTAMPTZ created_at
     }
 ```
+
+`auth.users` 는 Supabase Auth 가 소유하는 테이블이다. 우리가 만들지도, 수정하지도 않는다.
+위 ERD 에는 참조 관계를 보이기 위해 주요 컬럼만 표시했다.
 
 ### 2.2 LangGraph Persistence 관계
 
@@ -117,23 +119,24 @@ LangGraph 는 `user_id` 를 알 필요가 없다. `user_id` 는 FastAPI 가 해�
 
 모든 DDL 은 Supabase SQL Editor 에서 그대로 실행 가능하다.
 
-### 3.1 users
+### 3.1 users — 만들지 않는다
 
-```sql
-CREATE TABLE users (
-    id            BIGSERIAL   PRIMARY KEY,
-    username      TEXT        NOT NULL UNIQUE,
-    password_hash TEXT        NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
+사용자 계정은 **Supabase Auth 가 관리하는 `auth.users` 를 그대로 쓴다.**
+`users` 테이블을 직접 만들지 않으며, 비밀번호 해시도 우리가 보관하지 않는다.
+
+- PK 는 `UUID` 다. 따라서 아래 테이블의 `user_id` 도 모두 `UUID` 다
+- 로그인 식별자는 **email** 이다. Supabase Auth 는 임의의 username 을 기본 지원하지 않는다
+- 개발 중에는 Supabase 대시보드에서 **이메일 확인(Confirm email)을 꺼야** 가입 즉시 로그인된다
+
+프로필 정보(닉네임 등)가 필요해지면 `auth.users.id` 를 PK 이자 FK 로 갖는
+`profiles` 테이블을 별도로 만든다. 현재 요구사항에는 필요하지 않다.
 
 ### 3.2 chat_threads
 
 ```sql
 CREATE TABLE chat_threads (
     id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id    BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     title      TEXT        NOT NULL DEFAULT '새 대화',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -162,7 +165,7 @@ CREATE INDEX idx_chat_threads_user_updated
 CREATE TABLE chat_logs (
     id            BIGSERIAL   PRIMARY KEY,
     thread_id     UUID        NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
-    user_id       BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id       UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     question      TEXT        NOT NULL,
     answer        TEXT,
     status        TEXT        NOT NULL DEFAULT 'success'
@@ -180,7 +183,7 @@ CREATE INDEX idx_chat_logs_user_created   ON chat_logs (user_id, created_at DESC
 
 - **`user_id`** — 초안에는 `thread_id` 만 있어서 "사용자 기준 로그 조회"에 항상 조인이 필요했다.
   과제 요구사항이 최소 추적 필드로 **사용자 식별**을 명시하고 있어, 평가자가 조인 없이
-  `SELECT * FROM chat_logs WHERE user_id = 1` 로 바로 확인할 수 있게 비정규화했다.
+  `SELECT * FROM chat_logs WHERE user_id = '...'` 로 바로 확인할 수 있게 비정규화했다.
 - **`latency_ms`** — AI 호출 소요 시간. 운영 로그 및 지연 원인 추적용.
 
 `status` 에는 `CHECK` 제약을 걸어 `success` / `error` 외의 값이 들어가지 않게 한다.
@@ -322,6 +325,8 @@ langgraph>=1.0,<2
 langgraph-checkpoint-postgres      # 초안의 langgraph-checkpoint-sqlite 대체
 langchain-openai>=1.0
 psycopg[binary,pool]>=3.2          # 초안의 aiosqlite 대체
+supabase                           # Supabase Auth 호출용
+jinja2
 python-dotenv
 ```
 
@@ -471,6 +476,25 @@ app = FastAPI(lifespan=lifespan)
 Base URL: `/api`
 
 모든 Chat API 는 로그인된 사용자를 기준으로 처리한다.
+
+### 화면 (Jinja2)
+
+| Method | Path | 설명 | 인증 |
+|---|---|---|---|
+| `GET` | `/signup` | 회원가입 화면 | 불필요 |
+| `GET` | `/login` | 로그인 화면 | 불필요 |
+| `GET` | `/` | 채팅 화면 | **필요** (미로그인 시 `/login` 리다이렉트) |
+
+### 인증 API
+
+| Method | Endpoint | 설명 |
+|---|---|---|
+| `POST` | `/api/auth/signup` | 회원가입. Supabase Auth 로 계정 생성 |
+| `POST` | `/api/auth/login` | 로그인. 성공 시 HttpOnly 쿠키 발급 |
+| `POST` | `/api/auth/logout` | 로그아웃. 쿠키 삭제 |
+| `GET` | `/api/me` | 현재 로그인 사용자 확인 |
+
+### Chat API
 
 | Method | Endpoint | 설명 |
 |---|---|---|
@@ -654,20 +678,63 @@ DB 에 가벼운 질의(`SELECT 1`)를 포함시킨다. Render 와 Supabase 의 
 
 ---
 
-## 8. 보안
+## 8. 인증 및 보안
+
+### 8.1 인증 흐름
+
+자격 증명 관리는 Supabase Auth 에 위임하고, **세션 유지와 접근 제어는 FastAPI 가 담당한다.**
+
+```text
+Jinja2 회원가입/로그인 폼
+        ↓
+FastAPI  POST /api/auth/login
+        ↓
+Supabase Auth  sign_in_with_password()
+        ↓
+access_token / refresh_token 수신
+        ↓
+FastAPI 가 HttpOnly 쿠키로 발급
+        ↓
+이후 모든 요청에 브라우저가 자동 전송
+```
+
+토큰을 브라우저 JavaScript 에 넘기지 않고 **HttpOnly 쿠키에만** 담는다.
+`localStorage` 에 두면 XSS 로 탈취될 수 있다. Render 는 HTTPS 를 제공하므로
+`secure=True`, `samesite="lax"` 를 함께 설정한다.
+
+### 8.2 토큰 검증
+
+요청마다 쿠키의 `access_token` 을 검증해 사용자를 식별한다.
+
+```python
+async def get_current_user(request: Request) -> User:
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(401, "로그인이 필요합니다")
+    user = await verify_token(token)     # 아래 두 방식 중 하나
+    if user is None:
+        raise HTTPException(401, "세션이 만료되었습니다")
+    return user
+```
+
+| 방식 | 장점 | 단점 |
+|---|---|---|
+| **Supabase 에 조회** (`auth.get_user(token)`) | 구현이 단순하고 확실하다 | 요청마다 외부 왕복이 생긴다 |
+| 로컬 JWT 검증 | 빠르다 | 프로젝트의 서명 방식 확인이 필요하다 |
+
+**초기에는 Supabase 조회 방식으로 간다.** 지연이 문제가 되면 로컬 검증으로 바꾼다.
+검증 키 설정은 Supabase 대시보드의 JWT 설정에서 확인한다.
+
+### 8.3 Thread 소유권 확인
 
 `thread_id` 만으로 LangGraph 를 호출하면 안 된다.
 
 ```text
-로그인 사용자
-     ↓
-current_user.id
-     ↓
-chat_threads 조회
-     ↓
-thread.user_id == current_user.id ?
-     ↓ YES
-LangGraph 호출
+로그인 사용자 → current_user.id → chat_threads 조회
+                                        ↓
+                    thread.user_id == current_user.id ?
+                                        ↓ YES
+                                  LangGraph 호출
 ```
 
 ```python
@@ -677,19 +744,28 @@ thread = await get_owned_thread(db, thread_id, current_user.id)
 다른 사용자의 thread 이면 **403 이 아니라 404** 로 응답한다.
 403 을 주면 "그 ID 의 thread 가 존재한다"는 사실이 노출된다.
 
+### 8.4 RLS 는 켜지 않는다
+
+Supabase 는 테이블 단위 Row Level Security 를 제공하지만 이 프로젝트에서는 쓰지 않는다.
+서버가 서비스 키로 접속해 소유권을 직접 확인하는 구조이고, RLS 를 병행하면
+정책이 두 군데로 나뉘어 오히려 추적이 어려워진다.
+
+**대신 Supabase 접속 키가 절대 클라이언트로 나가지 않아야 한다.** 브라우저는 우리
+FastAPI 만 호출하고, Supabase 와의 통신은 전부 서버에서 일어난다.
+
 ---
 
-## 9. Streamlit 연동 흐름
+## 9. 화면 연동 흐름
 
 | 시점 | 호출 | 처리 |
 |---|---|---|
 | 로그인 직후 | `GET /api/threads` | 좌측 사이드바 대화 목록 구성 |
-| 새 대화 클릭 | `POST /api/threads` | `thread_id` 를 session 에 저장 |
-| 메시지 입력 | `POST /api/threads/{id}/messages` | AI 응답 표시 |
+| 새 대화 클릭 | `POST /api/threads` | 반환된 `thread_id` 를 현재 화면 상태로 보관 |
+| 메시지 입력 | `POST /api/threads/{id}/messages` | 응답을 말풍선으로 추가 |
 | 기존 대화 클릭 | `GET /api/threads/{id}/messages` | `chat_logs` 로 화면 복구 |
 
-Streamlit 은 인터랙션마다 스크립트를 위에서부터 재실행한다.
-가드를 두지 않으면 같은 질문이 중복 전송되므로 `st.session_state` 로 막는다.
+첫 진입 시 채팅 화면은 Jinja2 가 서버에서 렌더링하고, 이후 메시지 송수신만
+`fetch` 로 처리한다. 응답을 기다리는 동안 전송 버튼을 비활성화해 중복 요청을 막는다.
 
 ---
 
@@ -698,10 +774,10 @@ Streamlit 은 인터랙션마다 스크립트를 위에서부터 재실행한다
 ```text
                   User
                    ▼
-               Streamlit
+        브라우저 (Jinja2 + fetch)
                    ▼
                 FastAPI
-                   │ current_user.id
+                   │ current_user.id  (Supabase Auth 검증)
                    ▼
              chat_threads
                    │ thread_id
@@ -734,6 +810,9 @@ Streamlit 은 인터랙션마다 스크립트를 위에서부터 재실행한다
 | 연결 | 파일 경로 | Connection Pooler (Session 모드) |
 | 동시성 | 쓰기 잠금 주의, 워커 1개 | 제약 없음 |
 | 용량 | 디스크 여유만큼 | **500MB 상한** |
+| 사용자 테이블 | 직접 만든 `users` | **Supabase Auth 의 `auth.users`** |
+| `user_id` 타입 | `INTEGER` | `UUID` |
+| 로그인 식별자 | username | email |
 
 추가된 항목
 
@@ -747,26 +826,7 @@ Streamlit 은 인터랙션마다 스크립트를 위에서부터 재실행한다
 
 ## 12. 미결 사항
 
-아래 두 가지는 팀 합의가 필요하다. 확정 후 문서를 갱신한다.
-
-### 12.1 인증 방식
-
-`docs/architecture.md` 는 **세션 쿠키(`SessionMiddleware`)** 기준으로 작성되어 있으나,
-이 문서는 **Streamlit 이 REST API 를 호출**하는 구조다. 두 가지가 맞지 않는다.
-
-Streamlit 은 HTTP 응답에 쿠키를 심을 수 없다. `st.context.cookies` 는 읽기 전용이다.
-따라서 프론트가 Streamlit 이면 **Bearer 토큰 방식**으로 가야 한다.
-
-```text
-POST /api/auth/login  →  { "access_token": "..." }
-                          ↓ st.session_state 에 보관
-이후 모든 요청 헤더에  Authorization: Bearer <token>
-```
-
-이 경우 브라우저 새로고침 시 토큰이 사라지는 문제가 남으므로,
-쿠키 저장을 위한 별도 처리가 필요하다.
-
-### 12.2 AI 호출 타임아웃
+### 12.1 AI 호출 타임아웃
 
 `create_agent` 구성과 미들웨어 설정은 5장에 반영했다. 다만 타임아웃 처리는 아직 정하지 않았다.
 
@@ -788,6 +848,9 @@ POST /api/auth/login  →  { "access_token": "..." }
 | `OPENAI_API_KEY` | LLM API 인증 키 |
 | `MODEL_NAME` | 모델 식별자. 예: `openai:gpt-4.1-mini` |
 | `DATABASE_URL` | Supabase PostgreSQL 연결 문자열 (Pooler Session 모드) |
+| `SUPABASE_URL` | Supabase 프로젝트 URL |
+| `SUPABASE_ANON_KEY` | Supabase Auth 호출용 공개 키 |
+| `SUPABASE_SERVICE_ROLE_KEY` | 서버 전용 키. **절대 클라이언트로 내보내지 않는다** |
 | `LANGGRAPH_STRICT_MSGPACK` | 체크포인트 역직렬화 타입 제한. `true` 로 둔다 |
 | `SUMMARY_TRIGGER_TOKENS` | 요약을 시작할 토큰 임계값 (기본 8000) |
 | `SUMMARY_KEEP_TOKENS` | 원문으로 유지할 토큰 수 (기본 4000) |
@@ -797,4 +860,4 @@ POST /api/auth/login  →  { "access_token": "..." }
 `init_chat_model()` 은 `MODEL_NAME` 의 접두어(`openai:`)로 공급자를 판별한다.
 공급자를 바꾸려면 `MODEL_NAME` 과 해당 SDK 패키지, API 키 환경 변수를 함께 교체한다.
 
-인증 방식이 확정되면 `SESSION_SECRET` 또는 `JWT_SECRET` 이 추가된다.
+토큰 검증을 로컬 JWT 방식으로 전환하면 검증 키 관련 변수가 추가된다.

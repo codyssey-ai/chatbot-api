@@ -1,28 +1,36 @@
 sequenceDiagram
     participant B as 브라우저
     participant F as FastAPI
-    participant D as Supabase
-    participant A as Anthropic API
+    participant S as Supabase Auth
+    participant G as LangGraph Agent
+    participant D as PostgreSQL
+    participant A as OpenAI API
 
-    B->>F: POST /api/chat { message }
+    B->>F: POST /api/threads/{id}/messages
     Note over F: request_id 발급<br/>log: request_received
-    F->>F: 세션 쿠키 검증 · 미로그인이면 401
+    F->>S: 쿠키의 access_token 검증
+    S-->>F: user_id · 실패면 401
+    F->>D: thread 소유권 확인 · 타인 것이면 404
     F->>F: 입력 검증 · 빈 값 또는 2000자 초과면 422
-    F->>D: 최근 N턴 조회
-    D-->>F: 이전 대화 컨텍스트
 
     Note over F: log: ai_call_start
-    F->>A: messages.create (timeout 20s)
+    F->>G: ainvoke(현재 질문, thread_id)
+    G->>D: 체크포인트에서 이전 State 복구
+    Note over G: SummarizationMiddleware<br/>토큰 초과 시 과거 대화 요약
+    G->>A: LLM 호출
 
     alt 성공
-        A-->>F: 응답
+        A-->>G: 응답
+        G->>D: 새 State 체크포인트 저장
+        G-->>F: answer
         Note over F: log: ai_call_success (latency_ms)
-        F->>D: 질문 · 응답 INSERT
+        F->>D: chat_logs INSERT (status=success)
         Note over F: log: db_save_success
         F-->>B: 200 { answer }
     else 타임아웃 또는 실패
-        A--xF: APITimeoutError / APIError
+        A--xG: Timeout / API Error
+        G--xF: 예외 전파
         Note over F: log: ai_call_failed (error_code)
-        F->>D: 실패 이력 INSERT
-        F-->>B: 503 { error_code: "AI_TIMEOUT" }
+        F->>D: chat_logs INSERT (status=error)
+        F-->>B: 504 AI_TIMEOUT / 502 AI_UPSTREAM_ERROR
     end

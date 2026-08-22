@@ -6,16 +6,22 @@ flowchart LR
     subgraph render["Render · 무료 Web Service"]
         direction TB
         TLS["HTTPS 종료<br/>xxx.onrender.com"]
-        API["FastAPI / uvicorn<br/>SessionMiddleware"]
+        API["FastAPI / uvicorn"]
+        AG["LangGraph Agent<br/>SummarizationMiddleware"]
         TLS --> API
+        API --> AG
     end
 
-    subgraph supa["Supabase · 무료 PostgreSQL"]
-        DB[("users<br/>conversations<br/>messages")]
+    subgraph supa["Supabase · 무료"]
+        direction TB
+        AUTH["Supabase Auth<br/>auth.users"]
+        DB[("PostgreSQL<br/>chat_threads · chat_logs<br/>checkpoints")]
     end
 
-    AI["Anthropic API"]
+    AI["OpenAI API"]
 
-    B -->|"HTTPS · 세션 쿠키"| TLS
-    API -->|"SQLAlchemy<br/>Connection Pooler"| DB
-    API -->|"HTTPS · timeout 20s"| AI
+    B -->|"HTTPS · HttpOnly 쿠키"| TLS
+    API -->|"로그인 · 토큰 검증"| AUTH
+    API -->|"psycopg<br/>Connection Pooler"| DB
+    AG -->|"AsyncPostgresSaver"| DB
+    AG -->|"HTTPS"| AI
