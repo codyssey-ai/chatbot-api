@@ -17,9 +17,10 @@ import logging
 import time
 from uuid import UUID
 
+from app.chat.concurrency import thread_run_guard
 from app.chat import repository
 from app.core.config import settings
-from app.core.errors import AITimeout, AIUpstreamError
+from app.core.errors import AITimeout, AIUpstreamError, Conflict
 from app.core.logging import log_event
 from app.threads import service as threads_service
 
@@ -55,12 +56,14 @@ async def send_message(
     # 과거 대화는 직접 다시 조립하지 않는다. 같은 thread_id를 넘기면
     # AsyncPostgresSaver가 이전 State를 복구한다.
     try:
-        # 요약과 main·fallback 모델 호출을 모두 포함한 사용자 요청 전체 제한이다.
-        async with asyncio.timeout(settings.ai_timeout_seconds):
-            result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": question}]},
-                config={"configurable": {"thread_id": str(thread_id)}},
-            )
+        # 같은 대화방은 한 번에 하나의 State 갱신만 허용한다.
+        async with thread_run_guard.acquire(thread_id):
+            # 요약과 main·fallback 모델 호출을 모두 포함한 사용자 요청 전체 제한이다.
+            async with asyncio.timeout(settings.ai_timeout_seconds):
+                result = await agent.ainvoke(
+                    {"messages": [{"role": "user", "content": question}]},
+                    config={"configurable": {"thread_id": str(thread_id)}},
+                )
     except TimeoutError as exc:
         log_event("ai_call_failed", level=logging.ERROR, error_code="AI_TIMEOUT")
         await save_error_log(
@@ -71,6 +74,9 @@ async def send_message(
             error=exc,
         )
         raise AITimeout(detail="agent invocation timed out") from exc
+    except Conflict:
+        # 동일 thread의 진행 중인 요청은 AI 실패가 아니라 409로 그대로 돌려준다.
+        raise
     except Exception as exc:
         log_event(
             "ai_call_failed",
