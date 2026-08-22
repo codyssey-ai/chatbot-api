@@ -12,13 +12,32 @@ TODO(챗 담당): 전체 구현
 로그 이벤트: ai_call_start / ai_call_success / ai_call_failed / db_save_success
 """
 
+import asyncio
 import logging
 import time
 from uuid import UUID
 
+from app.chat.concurrency import thread_run_guard
 from app.chat import repository
+from app.core.config import settings
+from app.core.errors import AITimeout, AIUpstreamError, Conflict
 from app.core.logging import log_event
 from app.threads import service as threads_service
+
+
+async def save_error_log(*, pool, thread_id, user_id, question: str, error: Exception) -> None:
+    """AI 실패를 기록하되, 로그 DB 실패가 원래 오류를 덮어쓰지 않게 한다."""
+    try:
+        chat_id = await repository.save_error(
+            pool,
+            thread_id=thread_id,
+            user_id=user_id,
+            question=question,
+            error_message=f"{type(error).__name__}: {error}",
+        )
+        log_event("db_save_success", chat_id=chat_id)
+    except Exception as exc:
+        log_event("db_save_failed", level=logging.ERROR, error=type(exc).__name__)
 
 
 async def send_message(
@@ -34,21 +53,48 @@ async def send_message(
     log_event("ai_call_start", thread_id=thread_id)
     started = time.perf_counter()
 
-    # TODO: 아래 호출을 감싸 타임아웃과 예외를 처리한다.
-    #
-    #   result = await agent.ainvoke(
-    #       {"messages": [{"role": "user", "content": question}]},
-    #       config={"configurable": {"thread_id": str(thread_id)}},
-    #   )
-    #   answer = result["messages"][-1].content
-    #
-    # 실패 시 repository.save_error() 로 기록한 뒤
-    # AITimeout / AIUpstreamError 를 던진다.
-    #
-    # 주의: 요약이 트리거된 턴은 LLM 을 두 번 호출한다(요약 + 본 응답).
-    # 전체를 단일 타임아웃으로 묶으면 그 턴마다 실패할 수 있다.
-    # docs/API_SPEC.md 12.1 참고.
-    raise NotImplementedError
+    # 과거 대화는 직접 다시 조립하지 않는다. 같은 thread_id를 넘기면
+    # AsyncPostgresSaver가 이전 State를 복구한다.
+    try:
+        # 같은 대화방은 한 번에 하나의 State 갱신만 허용한다.
+        async with thread_run_guard.acquire(thread_id):
+            # 요약과 main·fallback 모델 호출을 모두 포함한 사용자 요청 전체 제한이다.
+            async with asyncio.timeout(settings.ai_timeout_seconds):
+                result = await agent.ainvoke(
+                    {"messages": [{"role": "user", "content": question}]},
+                    config={"configurable": {"thread_id": str(thread_id)}},
+                )
+    except TimeoutError as exc:
+        log_event("ai_call_failed", level=logging.ERROR, error_code="AI_TIMEOUT")
+        await save_error_log(
+            pool=pool,
+            thread_id=thread_id,
+            user_id=user_id,
+            question=question,
+            error=exc,
+        )
+        raise AITimeout(detail="agent invocation timed out") from exc
+    except Conflict:
+        # 동일 thread의 진행 중인 요청은 AI 실패가 아니라 409로 그대로 돌려준다.
+        raise
+    except Exception as exc:
+        log_event(
+            "ai_call_failed",
+            level=logging.ERROR,
+            error_code="AI_UPSTREAM_ERROR",
+            error=type(exc).__name__,
+        )
+        await save_error_log(
+            pool=pool,
+            thread_id=thread_id,
+            user_id=user_id,
+            question=question,
+            error=exc,
+        )
+        raise AIUpstreamError(detail=f"{type(exc).__name__}: {exc}") from exc
+    answer = result["messages"][-1].content
+    if not isinstance(answer, str):
+        answer = str(answer)
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     log_event("ai_call_success", latency_ms=latency_ms)

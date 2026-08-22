@@ -10,36 +10,83 @@
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
-from langchain.chat_models import init_chat_model
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from app.chat.prompts import SUMMARY_PROMPT, SYSTEM_PROMPT
 from app.core.config import settings
 
 
+def build_openai_model() -> ChatOpenAI:
+    """기본 OpenAI 모델 인스턴스를 만든다.
+
+    main과 summary는 같은 공급자를 쓰더라도 인스턴스를 공유하지 않는다.
+    이후 한쪽만 다른 공급자로 전환해도 서로의 설정에 영향을 주지 않는다.
+    """
+    return ChatOpenAI(
+        model=settings.openai_model_name,
+        temperature=0,
+        api_key=settings.openai_api_key,
+        timeout=settings.openai_timeout_seconds,
+        # 재시도 대신 명시적인 Gemini 폴백으로 장애를 처리한다.
+        max_retries=0,
+    )
+
+
+def build_gemini_model() -> ChatGoogleGenerativeAI:
+    """명시적으로 선택한 경우에만 Gemini 모델 인스턴스를 만든다."""
+    if not settings.gemini_api_key:
+        raise ValueError("GEMINI_API_KEY가 설정되어 있지 않습니다.")
+
+    return ChatGoogleGenerativeAI(
+        model=settings.gemini_model_name,
+        temperature=0,
+        api_key=settings.gemini_api_key,
+        request_timeout=settings.gemini_timeout_seconds,
+        retries=0,
+    )
+
+
+def build_openai_fallback_model():
+    """OpenAI 우선, 실패 시 Gemini를 쓰는 공통 모델 체인을 만든다."""
+    primary_model = build_openai_model()
+    if not settings.gemini_api_key:
+        return primary_model
+
+    return primary_model.with_fallbacks([build_gemini_model()])
+
+
+def build_model(provider: str):
+    """설정에서 명시한 공급자의 역할별 모델을 만든다."""
+    if provider == "openai":
+        return build_openai_fallback_model()
+    if provider == "gemini":
+        return build_gemini_model()
+    raise ValueError(f"지원하지 않는 모델 공급자입니다: {provider}")
+
+
 def build_agent(checkpointer):
     """체크포인터를 물린 에이전트를 만든다. lifespan 에서 한 번만 호출한다."""
-    # api_key 를 명시적으로 넘긴다.
-    # pydantic-settings 는 .env 를 Settings 객체로만 읽고 os.environ 에 넣지 않는데,
-    # langchain_openai 는 환경 변수를 직접 읽기 때문에 그냥 두면 인증에 실패한다.
-    model_kwargs = {"temperature": 0, "api_key": settings.openai_api_key}
+    # 기본 상태에서는 main과 summary 모두 OpenAI를 쓴다.
+    # OpenAI 실패 시에는 두 역할 모두 Gemini로 자동 전환한다.
+    main_model = build_model(settings.main_model_provider)
+    summary_model = build_model(settings.summary_model_provider)
 
-    main_model = init_chat_model(settings.model_name, **model_kwargs)
-    summary_model = init_chat_model(settings.model_name, **model_kwargs)
-
+    middleware = [
+        SummarizationMiddleware(
+            model=summary_model,
+            # 메시지 수가 아니라 토큰 기준으로 잡는다. tool call 이 늘어나면
+            # "최근 N개 메시지 = N/2 턴" 이 성립하지 않기 때문이다.
+            trigger=("tokens", settings.summary_trigger_tokens),
+            keep=("tokens", settings.summary_keep_tokens),
+            summary_prompt=SUMMARY_PROMPT,
+        )
+    ]
     return create_agent(
         model=main_model,
         tools=[],
         system_prompt=SYSTEM_PROMPT,
-        middleware=[
-            SummarizationMiddleware(
-                model=summary_model,
-                # 메시지 수가 아니라 토큰 기준으로 잡는다. tool call 이 늘어나면
-                # "최근 N개 메시지 = N/2 턴" 이 성립하지 않기 때문이다.
-                trigger=("tokens", settings.summary_trigger_tokens),
-                keep=("tokens", settings.summary_keep_tokens),
-                summary_prompt=SUMMARY_PROMPT,
-            )
-        ],
+        middleware=middleware,
         checkpointer=checkpointer,
         name="main_agent",
     )

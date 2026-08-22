@@ -46,5 +46,4 @@ async def delete_thread(
 
     # 체크포인트는 CASCADE 대상이 아니다. 빠뜨리면 삭제한 대화의 State 가
     # 계속 남아 Supabase 무료 플랜 500MB 를 잠식한다.
-    # TODO: await checkpointer.adelete_thread(str(thread_id))
-    raise NotImplementedError
+    await checkpointer.adelete_thread(str(thread_id))
