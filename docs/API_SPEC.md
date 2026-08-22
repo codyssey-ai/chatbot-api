@@ -117,7 +117,9 @@ LangGraph 는 `user_id` 를 알 필요가 없다. `user_id` 는 FastAPI 가 해�
 
 ## 3. 테이블 정의
 
-모든 DDL 은 Supabase SQL Editor 에서 그대로 실행 가능하다.
+아래 DDL 을 그대로 담은 실행용 스크립트가 **`scripts/schema.sql`** 에 있다.
+Supabase SQL Editor 에 붙여넣고 실행하면 되며, 여러 번 실행해도 안전하다.
+평가자용 조회 쿼리는 `scripts/check_logs.sql` 을 참고한다.
 
 ### 3.1 users — 만들지 않는다
 
@@ -744,14 +746,29 @@ thread = await get_owned_thread(db, thread_id, current_user.id)
 다른 사용자의 thread 이면 **403 이 아니라 404** 로 응답한다.
 403 을 주면 "그 ID 의 thread 가 존재한다"는 사실이 노출된다.
 
-### 8.4 RLS 는 켜지 않는다
+### 8.4 RLS 는 켜되 정책은 만들지 않는다
 
-Supabase 는 테이블 단위 Row Level Security 를 제공하지만 이 프로젝트에서는 쓰지 않는다.
-서버가 서비스 키로 접속해 소유권을 직접 확인하는 구조이고, RLS 를 병행하면
-정책이 두 군데로 나뉘어 오히려 추적이 어려워진다.
+Supabase 는 **`public` 스키마의 테이블을 PostgREST 로 자동 노출한다.**
+`anon` 키는 클라이언트에 배포되는 공개 키이므로, RLS 를 끈 채로 두면
+누구나 REST API 로 `chat_logs` 를 읽을 수 있다.
 
-**대신 Supabase 접속 키가 절대 클라이언트로 나가지 않아야 한다.** 브라우저는 우리
-FastAPI 만 호출하고, Supabase 와의 통신은 전부 서버에서 일어난다.
+따라서 두 테이블에 **RLS 를 켜되 정책은 하나도 만들지 않는다.**
+
+```sql
+ALTER TABLE public.chat_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_logs    ENABLE ROW LEVEL SECURITY;
+```
+
+| 접근 경로 | 결과 |
+|---|---|
+| PostgREST + `anon` 키 | **전부 차단** (정책이 없으므로 통과하는 행이 없다) |
+| 서버의 `DATABASE_URL` 접속 | 소유자 역할이라 RLS 를 우회한다. 영향 없음 |
+
+즉 **접근 제어의 주체는 FastAPI 의 소유권 확인**이고, RLS 는 외부 직접 접근을 막는
+차단벽 역할만 한다. 정책을 세밀하게 작성해 로직을 두 군데로 나누지는 않는다.
+
+여기에 더해 **Supabase 서비스 키가 클라이언트로 나가지 않아야 한다.** 브라우저는
+우리 FastAPI 만 호출하고, Supabase 와의 통신은 전부 서버에서 일어난다.
 
 ---
 
