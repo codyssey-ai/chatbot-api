@@ -147,6 +147,8 @@ document.getElementById("new-thread").addEventListener("click", () => {
   currentThreadId = null;
   $messages.innerHTML = "";
   $error.hidden = true;
+  $input.value = "";
+  setActiveThread(null);
   $input.focus();
 });
 
