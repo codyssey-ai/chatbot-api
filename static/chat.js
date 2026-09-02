@@ -330,7 +330,9 @@ document.getElementById("new-thread").addEventListener("click", () => {
   $input.focus();
 });
 
-loadThreads();
+loadThreads().catch((err) => {
+  showError(err.message || "채팅방 목록을 불러오지 못했습니다.");
+});
 
 async function loadMessages(threadId) {
   const res = await fetch(`/api/threads/${threadId}/messages`);
