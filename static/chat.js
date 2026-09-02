@@ -37,6 +37,11 @@ function renderThreads(threads) {
     renameButton.className = "thread-rename";
     renameButton.textContent = "이름 변경";
 
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "thread-delete";
+    deleteButton.textContent = "삭제";
+
     renameButton.addEventListener("click", async (e) => {
       e.stopPropagation();
 
@@ -62,6 +67,32 @@ function renderThreads(threads) {
       }
     });
 
+    deleteButton.addEventListener("click", async (e) => {
+      e.stopPropagation();
+
+      const confirmed = confirm(`"${thread.title}" 채팅방을 삭제하시겠습니까?`);
+
+      if (!confirmed) return;
+
+      try {
+        $error.hidden = true;
+
+        await deleteThread(thread.id);
+
+        if (currentThreadId === thread.id) {
+          currentThreadId = null;
+          $messages.innerHTML = "";
+          $input.value = "";
+        }
+
+        await loadThreads();
+        setActiveThread(currentThreadId);
+        $input.focus();
+      } catch (err) {
+        showError(err.message || "채팅방을 삭제하지 못했습니다.");
+      }
+    });
+
     item.addEventListener("click", async () => {
       try {
         $error.hidden = true;
@@ -77,6 +108,7 @@ function renderThreads(threads) {
 
     item.appendChild(title);
     item.appendChild(renameButton);
+    item.appendChild(deleteButton);
     $threadList.appendChild(item);
   });
 }
@@ -93,6 +125,16 @@ async function renameThread(threadId, title) {
   }
 
   return await res.json();
+}
+
+async function deleteThread(threadId) {
+  const res = await fetch(`/api/threads/${threadId}`, {
+    method: "DELETE",
+  });
+
+  if (!res.ok) {
+    throw new Error("채팅방을 삭제하지 못했습니다.");
+  }
 }
 
 async function loadThreads() {

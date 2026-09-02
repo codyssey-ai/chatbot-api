@@ -107,6 +107,7 @@ button.link {
 
 .thread-title {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -116,6 +117,14 @@ button.thread-rename {
   flex-shrink: 0;
   padding: 3px 6px;
   color: var(--muted);
+  background: none;
+  font-size: 11px;
+}
+
+button.thread-delete {
+  flex-shrink: 0;
+  padding: 3px 4px;
+  color: var(--danger);
   background: none;
   font-size: 11px;
 }
