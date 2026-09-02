@@ -18,6 +18,15 @@ function renderThreads(threads) {
     item.textContent = thread.title;
     item.dataset.threadId = thread.id;
 
+    item.addEventListener("click", async () => {
+      try {
+        $error.hidden = true;
+        await loadMessages(thread.id);
+      } catch (err) {
+        showError(err.message || "이전 대화를 불러오지 못했습니다.");
+      }
+    });
+
     $threadList.appendChild(item);
   });
 }
@@ -127,3 +136,23 @@ document.getElementById("new-thread").addEventListener("click", () => {
 });
 
 loadThreads();
+
+async function loadMessages(threadId) {
+  const res = await fetch(`/api/threads/${threadId}/messages`);
+
+  if (!res.ok) {
+    throw new Error("이전 대화를 불러오지 못했습니다.");
+  }
+
+  const logs = await res.json();
+
+  $messages.innerHTML = "";
+
+  logs.forEach((log) => {
+    addBubble("user", log.question);
+
+    if (log.answer !== null) {
+      addBubble("assistant", log.answer);
+    }
+  });
+}
