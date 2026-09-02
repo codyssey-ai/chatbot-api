@@ -125,6 +125,10 @@ $form.addEventListener("submit", async (e) => {
 
     pending.className = "bubble assistant";
     pending.textContent = body.answer;
+
+    await loadThreads();
+    setActiveThread(currentThreadId);
+
   } catch (err) {
     pending.remove();
     showError(err.message || "네트워크 오류가 발생했습니다.");
