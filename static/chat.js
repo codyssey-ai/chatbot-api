@@ -10,6 +10,17 @@ const $send = document.getElementById("send");
 const $error = document.getElementById("error");
 const $threadList = document.getElementById("thread-list");
 
+function setActiveThread(threadId) {
+  const items = $threadList.querySelectorAll("li");
+
+  items.forEach((item) => {
+    item.setAttribute(
+      "aria-current",
+      item.dataset.threadId === threadId ? "true" : "false"
+    );
+  });
+}
+
 function renderThreads(threads) {
   $threadList.innerHTML = "";
 
@@ -21,6 +32,10 @@ function renderThreads(threads) {
     item.addEventListener("click", async () => {
       try {
         $error.hidden = true;
+
+        currentThreadId = thread.id;
+        setActiveThread(thread.id);
+
         await loadMessages(thread.id);
       } catch (err) {
         showError(err.message || "이전 대화를 불러오지 못했습니다.");
