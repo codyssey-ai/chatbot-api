@@ -108,10 +108,16 @@ function renderThreads(threads) {
 
         currentThreadId = thread.id;
         setActiveThread(thread.id);
+        $send.disabled = true;
+        $messages.innerHTML = "";
 
         await loadMessages(thread.id);
       } catch (err) {
         showError(err.message || "이전 대화를 불러오지 못했습니다.");
+      } finally {
+        if (currentThreadId === thread.id || currentThreadId === null) {
+          $send.disabled = false;
+        }
       }
     });
 
