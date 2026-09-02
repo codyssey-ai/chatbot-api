@@ -8,6 +8,19 @@ const $form = document.getElementById("chat-form");
 const $input = document.getElementById("message");
 const $send = document.getElementById("send");
 const $error = document.getElementById("error");
+const $threadList = document.getElementById("thread-list");
+
+function renderThreads(threads) {
+  $threadList.innerHTML = "";
+
+  threads.forEach((thread) => {
+    const item = document.createElement("li");
+    item.textContent = thread.title;
+    item.dataset.threadId = thread.id;
+
+    $threadList.appendChild(item);
+  });
+}
 
 async function loadThreads() {
   const res = await fetch("/api/threads");
@@ -17,7 +30,8 @@ async function loadThreads() {
   }
 
   const threads = await res.json();
-  console.log("채팅방 목록:", threads);
+
+  renderThreads(threads);
 
   return threads;
 }
