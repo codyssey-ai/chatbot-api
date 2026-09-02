@@ -165,6 +165,22 @@ function showError(message) {
   $error.hidden = false;
 }
 
+function getChatErrorMessage(status, body = {}) {
+  if (status === 409) {
+    return "이 대화는 현재 응답을 생성 중입니다. 잠시 후 다시 시도해 주세요.";
+  }
+
+  if (status === 502) {
+    return "AI 응답을 받지 못했어요. 잠시 후 다시 시도해 주세요.";
+  }
+
+  if (status === 504) {
+    return "현재 응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.";
+  }
+
+  return body.message || "요청을 처리하지 못했습니다.";
+}
+
 async function ensureThread() {
   if (currentThreadId) return currentThreadId;
 
@@ -208,9 +224,8 @@ $form.addEventListener("submit", async (e) => {
       return;
     }
     if (!res.ok) {
-      // 서버가 내려주는 안내 메시지를 그대로 보여 준다.
       pending.remove();
-      showError(body.message || "요청을 처리하지 못했습니다.");
+      showError(getChatErrorMessage(res.status, body));
       return;
     }
 
@@ -252,6 +267,21 @@ loadThreads();
 async function loadMessages(threadId) {
   const res = await fetch(`/api/threads/${threadId}/messages`);
 
+  if (res.status === 401) {
+    location.href = "/login";
+    return;
+  }
+
+  if (res.status === 404) {
+    currentThreadId = null;
+    $messages.innerHTML = "";
+
+    await loadThreads();
+    setActiveThread(null);
+
+    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
+  }
+
   if (!res.ok) {
     throw new Error("이전 대화를 불러오지 못했습니다.");
   }
@@ -265,6 +295,11 @@ async function loadMessages(threadId) {
 
     if (log.answer !== null) {
       addBubble("assistant", log.answer);
+    } else {
+      addBubble(
+        "assistant",
+        "이 응답은 생성에 실패했습니다. 다시 질문해 주세요."
+      );
     }
   });
 }
