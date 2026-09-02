@@ -9,6 +9,19 @@ const $input = document.getElementById("message");
 const $send = document.getElementById("send");
 const $error = document.getElementById("error");
 
+async function loadThreads() {
+  const res = await fetch("/api/threads");
+
+  if (!res.ok) {
+    throw new Error("채팅방 목록을 불러오지 못했습니다.");
+  }
+
+  const threads = await res.json();
+  console.log("채팅방 목록:", threads);
+
+  return threads;
+}
+
 function addBubble(role, text) {
   const el = document.createElement("div");
   el.className = `bubble ${role}`;
@@ -98,3 +111,5 @@ document.getElementById("new-thread").addEventListener("click", () => {
   $error.hidden = true;
   $input.focus();
 });
+
+loadThreads();
