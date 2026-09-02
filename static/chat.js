@@ -288,6 +288,10 @@ async function loadMessages(threadId) {
 
   const logs = await res.json();
 
+  if (currentThreadId !== threadId) {
+    return;
+  }
+
   $messages.innerHTML = "";
 
   logs.forEach((log) => {
