@@ -140,6 +140,18 @@ async function renameThread(threadId, title) {
     return false;
   }
 
+  if (res.status === 404) {
+    if (currentThreadId === threadId) {
+      currentThreadId = null;
+      $messages.innerHTML = "";
+    }
+
+    await loadThreads();
+    setActiveThread(currentThreadId);
+
+    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
+  }
+
   if (!res.ok) {
     throw new Error("채팅방 제목을 변경하지 못했습니다.");
   }
@@ -156,6 +168,18 @@ async function deleteThread(threadId) {
   if (res.status === 401) {
     location.href = "/login";
     return false;
+  }
+
+  if (res.status === 404) {
+    if (currentThreadId === threadId) {
+      currentThreadId = null;
+      $messages.innerHTML = "";
+    }
+
+    await loadThreads();
+    setActiveThread(currentThreadId);
+
+    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
   }
 
   if (!res.ok) {
