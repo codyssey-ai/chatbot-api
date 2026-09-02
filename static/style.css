@@ -99,6 +99,36 @@ button.link {
 #thread-list li:hover,
 #thread-list li[aria-current="true"] { background: var(--border); }
 
+#thread-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thread-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+button.thread-rename {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  color: var(--muted);
+  background: none;
+  font-size: 11px;
+}
+
+button.thread-delete {
+  flex-shrink: 0;
+  padding: 3px 4px;
+  color: var(--danger);
+  background: none;
+  font-size: 11px;
+}
+
 .chat {
   display: flex;
   flex-direction: column;
@@ -137,3 +167,44 @@ button.link {
 #chat-form { display: flex; gap: 8px; margin-top: 12px; }
 
 #chat-form input { flex: 1; margin-top: 0; }
+
+@media (max-width: 700px) {
+  main {
+    padding: 16px 12px;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  #sidebar {
+    gap: 8px;
+  }
+
+  #thread-list {
+    max-height: 180px;
+    overflow-y: auto;
+  }
+
+  .chat {
+    height: 65vh;
+    min-height: 420px;
+  }
+
+  #messages {
+    padding: 12px;
+  }
+
+  .bubble {
+    max-width: 90%;
+  }
+
+  #chat-form input {
+    min-width: 0;
+  }
+
+  #chat-form button {
+    flex-shrink: 0;
+  }
+}

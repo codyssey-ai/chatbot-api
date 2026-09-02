@@ -8,6 +8,7 @@ chat_logs 는 LangGraph 컨텍스트 관리용이 아니다.
 
 from uuid import UUID
 
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 
