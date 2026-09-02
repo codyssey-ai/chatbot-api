@@ -59,7 +59,12 @@ function renderThreads(threads) {
       try {
         $error.hidden = true;
 
-        await renameThread(thread.id, trimmedTitle);
+        const renamed = await renameThread(thread.id, trimmedTitle);
+
+        if (!renamed) {
+          return;
+        }
+
         await loadThreads();
         setActiveThread(currentThreadId);
       } catch (err) {
@@ -77,7 +82,11 @@ function renderThreads(threads) {
       try {
         $error.hidden = true;
 
-        await deleteThread(thread.id);
+        const deleted = await deleteThread(thread.id);
+
+        if (!deleted) {
+          return;
+        }
 
         if (currentThreadId === thread.id) {
           currentThreadId = null;
@@ -120,11 +129,17 @@ async function renameThread(threadId, title) {
     body: JSON.stringify({ title }),
   });
 
+  if (res.status === 401) {
+    location.href = "/login";
+    return false;
+  }
+
   if (!res.ok) {
     throw new Error("채팅방 제목을 변경하지 못했습니다.");
   }
 
-  return await res.json();
+  await res.json();
+  return true;
 }
 
 async function deleteThread(threadId) {
@@ -132,13 +147,25 @@ async function deleteThread(threadId) {
     method: "DELETE",
   });
 
+  if (res.status === 401) {
+    location.href = "/login";
+    return false;
+  }
+
   if (!res.ok) {
     throw new Error("채팅방을 삭제하지 못했습니다.");
   }
+
+  return true;
 }
 
 async function loadThreads() {
   const res = await fetch("/api/threads");
+
+  if (res.status === 401) {
+    location.href = "/login";
+    return [];
+  }
 
   if (!res.ok) {
     throw new Error("채팅방 목록을 불러오지 못했습니다.");
@@ -189,6 +216,12 @@ async function ensureThread() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
   });
+
+  if (res.status === 401) {
+    location.href = "/login";
+    return null;
+  }
+
   if (!res.ok) throw new Error("대화를 시작하지 못했습니다.");
 
   const thread = await res.json();
@@ -211,6 +244,11 @@ $form.addEventListener("submit", async (e) => {
 
   try {
     const threadId = await ensureThread();
+
+    if (!threadId) {
+      return;
+    }
+
     const res = await fetch(`/api/threads/${threadId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
