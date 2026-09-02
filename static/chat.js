@@ -342,6 +342,10 @@ async function loadMessages(threadId) {
     return;
   }
 
+  if (currentThreadId !== threadId) {
+    return;
+  }
+
   if (res.status === 404) {
     currentThreadId = null;
     $messages.innerHTML = "";
