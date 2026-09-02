@@ -26,8 +26,41 @@ function renderThreads(threads) {
 
   threads.forEach((thread) => {
     const item = document.createElement("li");
-    item.textContent = thread.title;
     item.dataset.threadId = thread.id;
+
+    const title = document.createElement("span");
+    title.className = "thread-title";
+    title.textContent = thread.title;
+
+    const renameButton = document.createElement("button");
+    renameButton.type = "button";
+    renameButton.className = "thread-rename";
+    renameButton.textContent = "이름 변경";
+
+    renameButton.addEventListener("click", async (e) => {
+      e.stopPropagation();
+
+      const newTitle = prompt("새 채팅방 제목을 입력하세요.", thread.title);
+
+      if (newTitle === null) return;
+
+      const trimmedTitle = newTitle.trim();
+
+      if (!trimmedTitle) {
+        showError("채팅방 제목을 입력해 주세요.");
+        return;
+      }
+
+      try {
+        $error.hidden = true;
+
+        await renameThread(thread.id, trimmedTitle);
+        await loadThreads();
+        setActiveThread(currentThreadId);
+      } catch (err) {
+        showError(err.message || "채팅방 제목을 변경하지 못했습니다.");
+      }
+    });
 
     item.addEventListener("click", async () => {
       try {
@@ -42,8 +75,24 @@ function renderThreads(threads) {
       }
     });
 
+    item.appendChild(title);
+    item.appendChild(renameButton);
     $threadList.appendChild(item);
   });
+}
+
+async function renameThread(threadId, title) {
+  const res = await fetch(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+
+  if (!res.ok) {
+    throw new Error("채팅방 제목을 변경하지 못했습니다.");
+  }
+
+  return await res.json();
 }
 
 async function loadThreads() {
