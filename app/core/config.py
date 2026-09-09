@@ -14,7 +14,6 @@ class Settings(BaseSettings):
 
     # LLM
     openai_api_key: str
-    model_name: str = "openai:gpt-4.1-mini"
     gemini_api_key: str = ""
     openai_model_name: str = "gpt-4.1-mini"
     gemini_model_name: str = "gemini-2.5-flash"
@@ -25,6 +24,13 @@ class Settings(BaseSettings):
     ai_timeout_seconds: int = 60
     summary_trigger_tokens: int = 8000
     summary_keep_tokens: int = 4000
+
+    def model_label(self, provider: str) -> str:
+        """로그에 남길 `공급자:모델명` 문자열."""
+        name = (
+            self.openai_model_name if provider == "openai" else self.gemini_model_name
+        )
+        return f"{provider}:{name}"
 
     # Supabase
     database_url: str

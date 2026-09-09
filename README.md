@@ -278,23 +278,52 @@ Content-Type: application/json
 
 배포 URL: *(배포 후 기재)*
 
-Render 에 GitHub 저장소를 연결하고, `.env` 의 키를 Render 환경 변수로 등록한다.
-`COOKIE_SECURE` 만 `true` 로 바꾼다.
+Render 에 GitHub 저장소를 연결한다. 빌드·시작 명령과 환경 변수 목록은
+[`render.yaml`](render.yaml) 에 정의되어 있어, Blueprint 로 가져오면 그대로 재현된다.
+대시보드에서 직접 설정한다면 아래와 같다.
 
 ```
-Build Command  pip install -r requirements.txt
-Start Command  uvicorn app.main:app --host 0.0.0.0 --port $PORT
+Build Command      pip install -r requirements.txt
+Start Command      uvicorn app.main:app --host 0.0.0.0 --port $PORT
+Health Check Path  /health
 ```
 
-무료 플랜에는 유휴 정지가 있어 방치하면 평가 시점에 서비스가 멈출 수 있다.
+Python 버전은 [`.python-version`](.python-version) 으로 고정한다.
+
+### 환경 변수
+
+`.env` 의 키를 Render 환경 변수로 등록한다. **로컬과 달라지는 값은 하나뿐이다.**
+
+| 키 | 배포 값 |
+|---|---|
+| `COOKIE_SECURE` | **`true`** — Render 는 HTTPS 를 제공하므로 세션 쿠키에 Secure 를 켠다 |
+
+비밀값(`OPENAI_API_KEY`, `GEMINI_API_KEY`, `DATABASE_URL`, `SUPABASE_URL`,
+`SUPABASE_ANON_KEY`)은 `render.yaml` 에 값을 두지 않고 대시보드에서 입력한다.
+
+### 배포 후 확인
+
+1. `GET /health` 가 `{"status":"ok"}` 를 반환하는지
+2. 기동 로그에 `startup_complete main_model=... summary_model=...` 이 찍히는지
+3. Supabase → Authentication → URL Configuration 에 Render 도메인을 등록했는지
+4. 회원가입 → 로그인 → 대화 전송이 배포 환경에서 동작하는지
+
+### 유휴 정지 주의
+
+무료 플랜에는 유휴 정지가 있다.
 
 | 대상 | 정지 조건 | 결과 |
 |---|---|---|
-| Render | 15분 무활동 | spin down, 다음 요청까지 약 1분 |
-| Supabase | 7일 무활동 | 프로젝트 일시정지, 앱 전체 장애 |
+| Render | 15분 무활동 | spin down. 다음 요청 시 약 1분 뒤 자동으로 깨어난다 |
+| Supabase | **7일 무활동** | **프로젝트 일시정지. 앱 전체가 동작하지 않는다** |
 
-`/health` 는 DB 에 `SELECT 1` 을 던진다. GitHub Actions cron 으로 매일 한 번 호출해
-양쪽을 함께 깨운다.
+Render 는 요청이 오면 스스로 깨어나지만, **Supabase 는 그렇지 않다.**
+따라서 오래 사용하지 않았다면 **시연이나 평가 전에 서비스에 한 번 접속해 깨워 둔다.**
+`/health` 를 호출하면 DB 에 `SELECT 1` 이 나가 Render 와 Supabase 가 함께 깨어난다.
+
+```bash
+curl -s https://<배포주소>/health
+```
 
 ---
 
