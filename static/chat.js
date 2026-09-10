@@ -153,7 +153,12 @@ async function renameThread(threadId, title) {
   }
 
   if (!res.ok) {
-    throw new Error("채팅방 제목을 변경하지 못했습니다.");
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "채팅방 제목을 변경하지 못했습니다."
+      )
+    );
   }
 
   await res.json();
@@ -183,7 +188,12 @@ async function deleteThread(threadId) {
   }
 
   if (!res.ok) {
-    throw new Error("채팅방을 삭제하지 못했습니다.");
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "채팅방을 삭제하지 못했습니다."
+      )
+    );
   }
 
   return true;
@@ -198,7 +208,12 @@ async function loadThreads() {
   }
 
   if (!res.ok) {
-    throw new Error("채팅방 목록을 불러오지 못했습니다.");
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "채팅방 목록을 불러오지 못했습니다."
+      )
+    );
   }
 
   const threads = await res.json();
@@ -220,6 +235,23 @@ function addBubble(role, text) {
 function showError(message) {
   $error.textContent = message;
   $error.hidden = false;
+}
+
+async function addRequestIdToServerError(res, message, body = null) {
+  // 5xx 오류에만 request_id를 표시한다.
+  if (res.status < 500 || res.status >= 600) {
+    return message;
+  }
+
+  const errorBody =
+    body ?? (await res.json().catch(() => ({})));
+
+  const requestId =
+    res.headers.get("X-Request-ID") || errorBody.request_id;
+
+  return requestId
+    ? `${message} (request_id: ${requestId})`
+    : message;
 }
 
 function getChatErrorMessage(status, body = {}) {
@@ -252,7 +284,14 @@ async function ensureThread() {
     return null;
   }
 
-  if (!res.ok) throw new Error("대화를 시작하지 못했습니다.");
+  if (!res.ok) {
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "대화를 시작하지 못했습니다."
+      )
+    );
+  }
 
   const thread = await res.json();
   currentThreadId = thread.id;
@@ -293,7 +332,12 @@ $form.addEventListener("submit", async (e) => {
     }
     if (!res.ok) {
       pending.remove();
-      showError(getChatErrorMessage(res.status, body));
+
+      const message = getChatErrorMessage(res.status, body);
+
+      showError(
+        await addRequestIdToServerError(res, message, body)
+      );
       return;
     }
 
@@ -357,7 +401,12 @@ async function loadMessages(threadId) {
   }
 
   if (!res.ok) {
-    throw new Error("이전 대화를 불러오지 못했습니다.");
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "이전 대화를 불러오지 못했습니다."
+      )
+    );
   }
 
   const logs = await res.json();
