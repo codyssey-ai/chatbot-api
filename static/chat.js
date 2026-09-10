@@ -10,6 +10,7 @@ const $send = document.getElementById("send");
 const $error = document.getElementById("error");
 const $threadList = document.getElementById("thread-list");
 
+
 function setActiveThread(threadId) {
   const items = $threadList.querySelectorAll("li");
 
@@ -20,6 +21,232 @@ function setActiveThread(threadId) {
     );
   });
 }
+
+function addBubble(role, text) {
+  const el = document.createElement("div");
+  el.className = `bubble ${role}`;
+  el.textContent = text;
+  $messages.appendChild(el);
+  $messages.scrollTop = $messages.scrollHeight;
+  return el;
+}
+
+
+async function loadThreads() {
+  const res = await fetch("/api/threads");
+
+  if (res.status === 401) {
+    location.href = "/login";
+    return [];
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "채팅방 목록을 불러오지 못했습니다."
+      )
+    );
+  }
+
+  const threads = await res.json();
+
+  renderThreads(threads);
+
+  return threads;
+}
+
+async function loadMessages(threadId) {
+  const res = await fetch(`/api/threads/${threadId}/messages`);
+
+  if (res.status === 401) {
+    location.href = "/login";
+    return;
+  }
+
+  if (currentThreadId !== threadId) {
+    return;
+  }
+
+  if (res.status === 404) {
+    currentThreadId = null;
+    $messages.innerHTML = "";
+
+    await loadThreads();
+    setActiveThread(null);
+
+    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "이전 대화를 불러오지 못했습니다."
+      )
+    );
+  }
+
+  const logs = await res.json();
+
+  if (currentThreadId !== threadId) {
+    return;
+  }
+
+  $messages.innerHTML = "";
+
+  logs.forEach((log) => {
+    addBubble("user", log.question);
+
+    if (log.answer !== null) {
+      addBubble("assistant", log.answer);
+    } else {
+      addBubble(
+        "assistant",
+        "이 응답은 생성에 실패했습니다. 다시 질문해 주세요."
+      );
+    }
+  });
+}
+
+async function ensureThread() {
+  if (currentThreadId) return currentThreadId;
+
+  const res = await fetch("/api/threads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+
+  if (res.status === 401) {
+    location.href = "/login";
+    return null;
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "대화를 시작하지 못했습니다."
+      )
+    );
+  }
+
+  const thread = await res.json();
+  currentThreadId = thread.id;
+  return currentThreadId;
+}
+
+async function renameThread(threadId, title) {
+  const res = await fetch(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+
+  if (res.status === 401) {
+    location.href = "/login";
+    return false;
+  }
+
+  if (res.status === 404) {
+    if (currentThreadId === threadId) {
+      currentThreadId = null;
+      $messages.innerHTML = "";
+    }
+
+    await loadThreads();
+    setActiveThread(currentThreadId);
+
+    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "채팅방 제목을 변경하지 못했습니다."
+      )
+    );
+  }
+
+  await res.json();
+  return true;
+}
+
+async function deleteThread(threadId) {
+  const res = await fetch(`/api/threads/${threadId}`, {
+    method: "DELETE",
+  });
+
+  if (res.status === 401) {
+    location.href = "/login";
+    return false;
+  }
+
+  if (res.status === 404) {
+    if (currentThreadId === threadId) {
+      currentThreadId = null;
+      $messages.innerHTML = "";
+    }
+
+    await loadThreads();
+    setActiveThread(currentThreadId);
+
+    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      await addRequestIdToServerError(
+        res,
+        "채팅방을 삭제하지 못했습니다."
+      )
+    );
+  }
+
+  return true;
+}
+
+
+function showError(message) {
+  $error.textContent = message;
+  $error.hidden = false;
+}
+
+async function addRequestIdToServerError(res, message, body = null) {
+  // 5xx 오류에만 request_id를 표시한다.
+  if (res.status < 500 || res.status >= 600) {
+    return message;
+  }
+
+  const errorBody =
+    body ?? (await res.json().catch(() => ({})));
+
+  const requestId =
+    res.headers.get("X-Request-ID") || errorBody.request_id;
+
+  return requestId
+    ? `${message} (request_id: ${requestId})`
+    : message;
+}
+
+function getChatErrorMessage(status, body = {}) {
+  if (status === 409) {
+    return "이 대화는 현재 응답을 생성 중입니다. 잠시 후 다시 시도해 주세요.";
+  }
+
+  if (status === 502) {
+    return "AI 응답을 받지 못했어요. 잠시 후 다시 시도해 주세요.";
+  }
+
+  if (status === 504) {
+    return "현재 응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.";
+  }
+
+  return body.message || "요청을 처리하지 못했습니다.";
+}
+
 
 function renderThreads(threads) {
   $threadList.innerHTML = "";
@@ -128,175 +355,6 @@ function renderThreads(threads) {
   });
 }
 
-async function renameThread(threadId, title) {
-  const res = await fetch(`/api/threads/${threadId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
-  });
-
-  if (res.status === 401) {
-    location.href = "/login";
-    return false;
-  }
-
-  if (res.status === 404) {
-    if (currentThreadId === threadId) {
-      currentThreadId = null;
-      $messages.innerHTML = "";
-    }
-
-    await loadThreads();
-    setActiveThread(currentThreadId);
-
-    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      await addRequestIdToServerError(
-        res,
-        "채팅방 제목을 변경하지 못했습니다."
-      )
-    );
-  }
-
-  await res.json();
-  return true;
-}
-
-async function deleteThread(threadId) {
-  const res = await fetch(`/api/threads/${threadId}`, {
-    method: "DELETE",
-  });
-
-  if (res.status === 401) {
-    location.href = "/login";
-    return false;
-  }
-
-  if (res.status === 404) {
-    if (currentThreadId === threadId) {
-      currentThreadId = null;
-      $messages.innerHTML = "";
-    }
-
-    await loadThreads();
-    setActiveThread(currentThreadId);
-
-    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      await addRequestIdToServerError(
-        res,
-        "채팅방을 삭제하지 못했습니다."
-      )
-    );
-  }
-
-  return true;
-}
-
-async function loadThreads() {
-  const res = await fetch("/api/threads");
-
-  if (res.status === 401) {
-    location.href = "/login";
-    return [];
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      await addRequestIdToServerError(
-        res,
-        "채팅방 목록을 불러오지 못했습니다."
-      )
-    );
-  }
-
-  const threads = await res.json();
-
-  renderThreads(threads);
-
-  return threads;
-}
-
-function addBubble(role, text) {
-  const el = document.createElement("div");
-  el.className = `bubble ${role}`;
-  el.textContent = text;
-  $messages.appendChild(el);
-  $messages.scrollTop = $messages.scrollHeight;
-  return el;
-}
-
-function showError(message) {
-  $error.textContent = message;
-  $error.hidden = false;
-}
-
-async function addRequestIdToServerError(res, message, body = null) {
-  // 5xx 오류에만 request_id를 표시한다.
-  if (res.status < 500 || res.status >= 600) {
-    return message;
-  }
-
-  const errorBody =
-    body ?? (await res.json().catch(() => ({})));
-
-  const requestId =
-    res.headers.get("X-Request-ID") || errorBody.request_id;
-
-  return requestId
-    ? `${message} (request_id: ${requestId})`
-    : message;
-}
-
-function getChatErrorMessage(status, body = {}) {
-  if (status === 409) {
-    return "이 대화는 현재 응답을 생성 중입니다. 잠시 후 다시 시도해 주세요.";
-  }
-
-  if (status === 502) {
-    return "AI 응답을 받지 못했어요. 잠시 후 다시 시도해 주세요.";
-  }
-
-  if (status === 504) {
-    return "현재 응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.";
-  }
-
-  return body.message || "요청을 처리하지 못했습니다.";
-}
-
-async function ensureThread() {
-  if (currentThreadId) return currentThreadId;
-
-  const res = await fetch("/api/threads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
-  });
-
-  if (res.status === 401) {
-    location.href = "/login";
-    return null;
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      await addRequestIdToServerError(
-        res,
-        "대화를 시작하지 못했습니다."
-      )
-    );
-  }
-
-  const thread = await res.json();
-  currentThreadId = thread.id;
-  return currentThreadId;
-}
 
 $form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -356,6 +414,7 @@ $form.addEventListener("submit", async (e) => {
   }
 });
 
+
 document.getElementById("logout").addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST" });
   location.href = "/login";
@@ -374,59 +433,8 @@ document.getElementById("new-thread").addEventListener("click", () => {
   $input.focus();
 });
 
+
 loadThreads().catch((err) => {
   showError(err.message || "채팅방 목록을 불러오지 못했습니다.");
 });
 
-async function loadMessages(threadId) {
-  const res = await fetch(`/api/threads/${threadId}/messages`);
-
-  if (res.status === 401) {
-    location.href = "/login";
-    return;
-  }
-
-  if (currentThreadId !== threadId) {
-    return;
-  }
-
-  if (res.status === 404) {
-    currentThreadId = null;
-    $messages.innerHTML = "";
-
-    await loadThreads();
-    setActiveThread(null);
-
-    throw new Error("삭제되었거나 접근할 수 없는 채팅방입니다.");
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      await addRequestIdToServerError(
-        res,
-        "이전 대화를 불러오지 못했습니다."
-      )
-    );
-  }
-
-  const logs = await res.json();
-
-  if (currentThreadId !== threadId) {
-    return;
-  }
-
-  $messages.innerHTML = "";
-
-  logs.forEach((log) => {
-    addBubble("user", log.question);
-
-    if (log.answer !== null) {
-      addBubble("assistant", log.answer);
-    } else {
-      addBubble(
-        "assistant",
-        "이 응답은 생성에 실패했습니다. 다시 질문해 주세요."
-      );
-    }
-  });
-}
