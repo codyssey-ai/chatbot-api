@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}채팅{% endblock %}
+
+{% block nav %}
+<button id="logout" class="link">로그아웃</button>
+{% endblock %}
+
+{% block content %}
+<div class="layout">
+  <aside id="sidebar">
+    <button id="new-thread">+ 새 대화</button>
+    <ul id="thread-list"></ul>
+  </aside>
+
+  <section class="chat">
+    <div id="messages"></div>
+
+    <form id="chat-form">
+      <input id="message" name="message" maxlength="2000" autocomplete="off"
+             placeholder="무엇이든 물어보세요" required>
+      <button type="submit" id="send">보내기</button>
+    </form>
+    <p class="error" id="error" hidden></p>
+  </section>
+</div>
+{% endblock %}
+
+{% block script %}
+<script src="/static/chat.js"></script>
+{% endblock %}

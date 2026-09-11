@@ -1,0 +1,4 @@
+flowchart LR
+    Dev["팀원"] -->|"PR 머지"| GH["GitHub · main"]
+    GH -->|"Auto Deploy"| R["Render"]
+    R -->|"SELECT 1"| S["Supabase"]
