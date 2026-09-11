@@ -42,7 +42,6 @@ Supabase 서비스 키도 클라이언트로 나가지 않는다.
 flowchart LR
     Dev["팀원"] -->|"PR 머지"| GH["GitHub · main"]
     GH -->|"Auto Deploy"| R["Render"]
-    CR["GitHub Actions<br/>cron · 매일 1회"] -->|"GET /health"| R
     R -->|"SELECT 1"| S["Supabase"]
 ```
 
@@ -53,8 +52,9 @@ flowchart LR
 | Render | 15분 무활동 | spin down, 다음 요청까지 약 1분 |
 | Supabase | **7일 무활동** | **프로젝트 일시정지, 앱 전체 장애** |
 
-`/health` 엔드포인트가 DB에 `SELECT 1`을 던지도록 만들고,
-GitHub Actions cron으로 매일 한 번 호출해 양쪽을 함께 깨운다.
+`/health` 엔드포인트가 DB에 `SELECT 1`을 던지므로, 한 번 호출하면 Render와
+Supabase가 함께 깨어난다. 자동 호출 장치는 두지 않았다. 오래 방치했다면
+시연이나 평가 전에 직접 호출해 깨워 둔다.
 
 ## 3. 요청 처리 흐름
 
