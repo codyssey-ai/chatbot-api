@@ -89,7 +89,7 @@ app.include_router(chat_router.router)
 async def health():
     """서버와 DB 상태 확인.
 
-    GitHub Actions cron 이 매일 호출해 Render 와 Supabase 의 유휴 정지를 막는다.
+    DB 에 SELECT 1 을 보내므로, 호출하면 Render 와 Supabase 가 함께 깨어난다.
     """
     await ping(app.state.pool)
     return {"status": "ok"}

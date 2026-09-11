@@ -674,9 +674,9 @@ GET /health
 { "status": "ok" }
 ```
 
-DB 에 가벼운 질의(`SELECT 1`)를 포함시킨다. Render 와 Supabase 의 유휴 정지를
-막는 cron 이 이 엔드포인트를 호출하기 때문이다. 자세한 내용은
-[architecture.md](./architecture.md) 2장 참고.
+DB 에 가벼운 질의(`SELECT 1`)를 포함시킨다. 서버뿐 아니라 DB 까지 살아 있는지
+확인할 수 있고, 호출하면 Render 와 Supabase 의 유휴 정지를 함께 풀 수 있다.
+자세한 내용은 [architecture.md](./architecture.md) 2장 참고.
 
 ---
 
