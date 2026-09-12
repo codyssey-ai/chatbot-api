@@ -181,6 +181,39 @@ OpenAI 호출과 Supabase 접속은 전부 서버 안에서 일어난다.
 
 자세한 내용은 [`docs/architecture.md`](docs/architecture.md) 참고.
 
+### 인증 방식 — 왜 서버 세션이 아니라 토큰인가
+
+세 가지를 두고 골랐다.
+
+| 방식 | 서버가 보관하는 것 | 문제 |
+|---|---|---|
+| 서버 세션 (`SessionMiddleware`) | 세션 저장소 | 프로세스 메모리에 두면 **재배포마다 전원 로그아웃**된다. 무료 플랜은 15분 무활동이면 spin down 되므로 사실상 매번 풀린다. Redis 를 따로 두는 건 과하다 |
+| 토큰을 응답 본문으로 전달 | 없음 | JavaScript 가 토큰을 들고 있어야 해서 **XSS 에 그대로 노출**된다 |
+| **토큰을 HttpOnly 쿠키로 전달** | **없음** | 채택 |
+
+정리하면 — **자격 증명 관리는 Supabase Auth 에 위임하고, 세션 유지는 토큰으로,
+토큰 보관은 브라우저 쿠키로** 한다. 서버는 아무것도 저장하지 않는다.
+
+- 서버가 무상태라 **재배포·재시작해도 로그인이 풀리지 않는다**
+- `httponly=True` 로 JavaScript 의 `document.cookie` 접근을 차단한다.
+  그래서 [`static/chat.js`](static/chat.js) 에는 토큰을 다루는 코드가 한 줄도 없다
+- `secure` 는 환경에 따라 갈린다. 로컬은 HTTP 라 `false`, 배포는 HTTPS 라 `true`
+- `samesite="lax"` 로 다른 사이트가 보낸 요청에는 쿠키가 실리지 않게 한다
+- 쿠키 수명(`max_age`)을 Supabase 가 알려준 토큰 만료 시각에 맞춰, 토큰은 죽었는데
+  쿠키만 살아 있는 엇박자를 없앤다
+
+`SessionMiddleware` 를 등록하지 않는 것도 같은 이유다. 서버에 보관할 세션이 없다.
+대신 **인증 확인 로직을 `Depends` 의존성으로 분리**해
+([`app/auth/deps.py`](app/auth/deps.py)) 7개 엔드포인트가 한 줄로 재사용한다.
+
+```python
+user: CurrentUser = Depends(get_current_user)
+```
+
+트레이드오프도 있다. 요청마다 Supabase 에 토큰 검증을 왕복해 **약 0.4초가 붙는다.**
+단순하고 확실한 대신 지연을 택했다. 문제가 되면 공개키를 받아 서버에서 직접 검증하는
+방식으로 바꿀 수 있다. 자세한 비교는 [`docs/API_SPEC.md`](docs/API_SPEC.md) 8.2 참고.
+
 ### 요청 처리 흐름
 
 ![요청 처리 흐름](docs/images/03-request-flow.png)
@@ -192,19 +225,87 @@ OpenAI 호출과 Supabase 접속은 전부 서버 안에서 일어난다.
 전체 명세와 요청·응답 예시는 [`docs/API_SPEC.md`](docs/API_SPEC.md) 에 있다.
 서버 기동 후 http://localhost:8000/docs 에서도 확인할 수 있다.
 
+엔드포인트는 라우터 단위로 나뉜다. 각 라우터가 책임지는 범위가 곧 폴더 경계다.
+
+**`app/auth/router.py`** — 계정과 세션. 인증이 필요 없는 유일한 API 묶음이다.
+
 | Method | Endpoint | 설명 | 인증 |
 |---|---|---|:--:|
 | `POST` | `/api/auth/signup` | 회원가입 | |
 | `POST` | `/api/auth/login` | 로그인. HttpOnly 쿠키 발급 | |
-| `POST` | `/api/auth/logout` | 로그아웃 | |
+| `POST` | `/api/auth/logout` | 로그아웃. 쿠키 삭제 | |
 | `GET` | `/api/me` | 현재 사용자 확인 | O |
+
+**`app/threads/router.py`** — 채팅방 CRUD. `{id}` 를 받는 요청은 소유권을 먼저 확인한다.
+
+| Method | Endpoint | 설명 | 인증 |
+|---|---|---|:--:|
 | `POST` | `/api/threads` | 새 채팅 생성 | O |
 | `GET` | `/api/threads` | 내 채팅 목록 | O |
 | `PATCH` | `/api/threads/{id}` | 제목 변경 | O |
-| `DELETE` | `/api/threads/{id}` | 채팅 삭제 | O |
+| `DELETE` | `/api/threads/{id}` | 채팅 삭제. 체크포인트까지 정리 | O |
+
+**`app/chat/router.py`** — AI 파이프라인. 경로 앞부분은 `threads` 와 같지만
+채팅방 CRUD 와 성격이 달라 파일을 나눴다.
+
+| Method | Endpoint | 설명 | 인증 |
+|---|---|---|:--:|
 | `GET` | `/api/threads/{id}/messages` | 대화 내역 조회 | O |
 | `POST` | `/api/threads/{id}/messages` | 메시지 전송 | O |
+
+**`app/web/router.py`** — Jinja2 화면. JSON 이 아니라 HTML 을 반환한다.
+쿠키 존재만 보고 분기하며, 실제 토큰 검증은 화면이 호출하는 API 가 한다.
+
+| Method | Endpoint | 설명 |
+|---|---|---|
+| `GET` | `/` | 채팅 화면. 쿠키 없으면 `/login` 으로 303 |
+| `GET` | `/login` | 로그인 화면 |
+| `GET` | `/signup` | 회원가입 화면 |
+
+**`app/main.py`** — 운영용.
+
+| Method | Endpoint | 설명 | 인증 |
+|---|---|---|:--:|
 | `GET` | `/health` | 서버·DB 상태 확인 | |
+
+### 공개 · 인증 필요 구분
+
+| 구분 | 엔드포인트 |
+|---|---|
+| **공개** | `/`, `/login`, `/signup`, `POST /api/auth/signup`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /health` |
+| **인증 필요** | 그 외 **모든 `/api`** — `Depends(get_current_user)` 가 붙는다 |
+
+비로그인 요청은 `401 UNAUTHORIZED` 와 `"로그인이 필요합니다."` 를 받는다.
+
+### 왜 챗봇 기능을 로그인 사용자로 제한했는가
+
+두 가지 이유다.
+
+1. **비용과 남용 방지.** AI 호출은 요청마다 실제 비용이 발생한다. 인증이 없으면
+   누구나 무제한으로 호출할 수 있어 비용이 통제되지 않고, 사용자별 제한도 걸 수 없다.
+2. **대화는 개인 데이터다.** 대화 로그를 사용자 기준으로 쌓고 조회하려면 요청 주체를
+   식별해야 한다. `chat_logs.user_id` 가 없으면 "내 대화" 라는 개념 자체가 성립하지 않는다.
+
+그래서 모든 채팅 관련 API 에 `Depends(get_current_user)` 를 걸고, 조회·수정·삭제는
+**소유권까지** 확인한다. 타인 소유 리소스에는 403 이 아니라 404 를 준다.
+403 은 "그 ID 의 자원이 존재한다" 는 사실을 알려주는 셈이기 때문이다.
+
+### API 스키마 변경 정책
+
+현재 버전 접두어(`/api/v1`)를 쓰지 않는다. 클라이언트가 같은 저장소의 브라우저
+화면 하나뿐이라, 서버와 프론트가 항상 같은 커밋으로 배포되기 때문이다.
+
+스키마를 바꿀 때는 아래를 따른다.
+
+| 변경 | 취급 | 절차 |
+|---|---|---|
+| 응답에 필드 **추가** | 호환 | 그대로 배포. 기존 클라이언트는 무시한다 |
+| 선택 필드(기본값 있음) **추가** | 호환 | 그대로 배포 |
+| 필드 **삭제 · 이름 변경 · 타입 변경** | 비호환 | `docs/API_SPEC.md` 갱신 + 프론트 동시 수정 |
+| 엔드포인트 **삭제 · 경로 변경** | 비호환 | 같은 PR 에서 프론트까지 고친다 |
+
+비호환 변경은 **서버와 프론트를 같은 PR 로 묶는다.** 외부 클라이언트가 생기면
+그때 `/api/v1` 접두어를 도입하고 이 정책을 버전 정책으로 바꾼다.
 
 ### 예시 — 메시지 전송
 
@@ -251,19 +352,74 @@ Content-Type: application/json
 `chat_logs` 는 컨텍스트 관리용이 아니다. 미들웨어가 오래된 대화를 요약해도
 `chat_logs` 의 원본은 그대로 유지된다.
 
+대화를 한 테이블(`conversations`)에 담지 않고 둘로 나눈 이유는, 사용자가 여러
+대화방을 오갈 수 있어야 하고 LangGraph 가 대화 단위 식별자를 요구하기 때문이다.
+일반적인 `conversations` 설계와 대응시키면 아래와 같다.
+
+| 흔한 이름 | 이 프로젝트 | 비고 |
+|---|---|---|
+| `conversations` | `chat_threads` | 대화방 1건. `id` 가 LangGraph `thread_id` |
+| `messages` / `chat_logs` | `chat_logs` | 질문·응답 1쌍. `thread_id` 로 묶인다 |
+
 ### DB 확인 가이드
 
-[`scripts/check_logs.sql`](scripts/check_logs.sql) 을 Supabase SQL Editor 에서 실행한다.
-쿼리 6종이 들어 있다.
+두 가지 방법을 제공한다. **SQL 스크립트**가 가장 빠르고, **API** 는 로그인 상태에서
+화면으로도 확인할 수 있다.
 
-1. 최근 대화 로그 20건 (질문·응답·시각·사용자)
-2. 사용자별 누적 현황 (스레드 수, 메시지 수, 실패 수, 평균 지연)
-3. 특정 사용자의 대화 전체 조회
-4. 실패한 호출 확인
-5. 체크포인트 적재 확인
-6. 저장 용량 확인
+#### 방법 1 — SQL 스크립트 (권장)
 
-로그인 후 `GET /api/threads/{id}/messages` 로 화면에서도 확인할 수 있다.
+SQLite 가 아니라 Supabase PostgreSQL 을 쓰므로 파일 경로 대신 대시보드로 접속한다.
+
+1. [supabase.com](https://supabase.com) 로그인 → 해당 프로젝트 선택
+2. 왼쪽 사이드바 **SQL Editor** → **New query**
+3. [`scripts/check_logs.sql`](scripts/check_logs.sql) 의 내용을 붙여넣고
+   **쿼리 블록을 하나씩** 선택해 `Ctrl/Cmd + Enter` 로 실행
+
+| # | 쿼리 | 확인 내용 |
+|---|---|---|
+| 1 | 최근 대화 로그 20건 | 질문·응답·생성 시각·사용자 이메일 |
+| 2 | 사용자별 누적 현황 | 스레드 수, 메시지 수, 실패 수, 평균 지연 |
+| 3 | 특정 사용자 대화 전체 | 59행의 이메일을 바꿔 실행 |
+| 4 | 실패한 호출 | AI 타임아웃·오류가 `error_message` 와 함께 |
+| 5 | 체크포인트 적재 | 대화 State 가 저장되고 있는지 |
+| 6 | 저장 용량 | 무료 플랜 500MB 관리 |
+
+로컬에서 `psql` 로 실행하려면 `.env` 의 `DATABASE_URL` 을 그대로 쓴다.
+
+```bash
+psql "$DATABASE_URL" -f scripts/check_logs.sql
+```
+
+#### 방법 2 — 로그 조회 API
+
+로그인하면 본인 대화만 조회된다. 브라우저로 로그인한 뒤 개발자도구
+**Application → Cookies** 에서 `access_token` 값을 복사해 사용한다.
+
+```bash
+BASE=https://chatbot-api-xihh.onrender.com
+TOKEN=<복사한 access_token>
+
+# 1) 내 채팅방 목록
+curl -s "$BASE/api/threads" -b "access_token=$TOKEN"
+
+# 2) 특정 채팅방의 대화 내역
+curl -s "$BASE/api/threads/<thread_id>/messages" -b "access_token=$TOKEN"
+```
+
+```json
+[
+  {
+    "id": 12,
+    "question": "내가 아까 DB 뭐 쓴다고 했지?",
+    "answer": "Supabase PostgreSQL 을 사용한다고 하셨습니다.",
+    "status": "success",
+    "created_at": "2026-09-12T02:31:07.412Z"
+  }
+]
+```
+
+실패한 호출은 `status` 가 `"error"` 이고 `answer` 가 `null` 이다.
+채팅 화면에서 채팅방을 열면 이 API 로 이전 대화가 복구된다.
 
 ---
 
@@ -359,6 +515,14 @@ curl -s https://chatbot-api-xihh.onrender.com/health
 | 김현중 ([@stnguswnd](https://github.com/stnguswnd)) | AI 파이프라인 · 채팅 API | 14 |
 | 백예지 ([@yejibaek12](https://github.com/yejibaek12)) | 프론트엔드 | 19 |
 
+> 백예지는 작업 중 git 사용자 이름이 `bllancck` 에서 `yejibaek12` 로 바뀌어
+> `git shortlog` 에는 17 + 2 로 나뉘어 표시된다. 이메일(`whyj102@gmail.com`)이
+> 같아 동일인이며, 합산 19 커밋이다. 아래 명령으로 확인할 수 있다.
+>
+> ```bash
+> git log --no-merges develop --format='%ae' | sort | uniq -c | sort -rn
+> ```
+
 ### 정재윤 — API · 공통 기반
 
 - 프로젝트 구조 설계. 기능별 패키지와 라우터 → 서비스 → 리포지토리 3계층 고정
@@ -389,6 +553,69 @@ curl -s https://chatbot-api-xihh.onrender.com/health
 - 오류 안내 — 인증 만료 시 로그인 페이지 이동, 409 · 502 · 504 상황별 문구,
   5xx 오류에 `request_id` 표시
 - `chat.js` 코드 구조 재배치
+
+---
+
+## 개발 이력
+
+모든 작업은 `이슈 → 작업 브랜치 → PR → 리뷰 → 머지` 순서로 진행했다.
+`main` 과 `develop` 에는 직접 push 하지 않는다. 규칙은
+[`CONTRIBUTING.md`](CONTRIBUTING.md) 에 정의되어 있다.
+
+```
+feat/15-supabase-auth ──┐
+feat/17-multiturn-chat ─┼─→ develop ──→ main (배포)
+docs/24-readme-deploy ──┘
+```
+
+Squash merge 를 쓰지 않고 **merge commit(`--no-ff`)** 으로 머지한다.
+Squash 는 브랜치의 개별 커밋을 하나로 합쳐 버려 팀원별 커밋 기록이 사라지기 때문이다.
+
+### PR 목록
+
+문서의 각 항목이 어느 작업에서 나왔는지 이 표로 대조할 수 있다.
+
+| PR | 브랜치 | 작업 | 담당 |
+|---|---|---|---|
+| [#4](https://github.com/codyssey-ai/chatbot-api/pull/4) | `docs/3-architecture` | 시스템 구조 문서, 아키텍처 다이어그램 | 정재윤 |
+| [#6](https://github.com/codyssey-ai/chatbot-api/pull/6) | `docs/5-chat-api-spec` | Chat API 설계 문서 | 정재윤 |
+| [#8](https://github.com/codyssey-ai/chatbot-api/pull/8) | `chore/7-supabase-schema` | DB 스키마, 로그 확인용 SQL | 정재윤 |
+| [#10](https://github.com/codyssey-ai/chatbot-api/pull/10) | `chore/9-project-scaffold` | FastAPI 초기 구조 | 정재윤 |
+| [#12](https://github.com/codyssey-ai/chatbot-api/pull/12) | `docs/11-readme` | README 작성 | 정재윤 |
+| [#14](https://github.com/codyssey-ai/chatbot-api/pull/14) | `chore/13-restructure-app` | 기능별 패키지 재구성 | 정재윤 |
+| [#16](https://github.com/codyssey-ai/chatbot-api/pull/16) | `feat/15-supabase-auth` | 회원가입·로그인·토큰 검증 | 정재윤 |
+| [#18](https://github.com/codyssey-ai/chatbot-api/pull/18) | `feat/17-multiturn-chat-persistence` | 멀티턴 AI 응답, 대화 로그 저장 | 김현중 |
+| [#20](https://github.com/codyssey-ai/chatbot-api/pull/20) | `feat/19-thread-session-ui` | 이전 대화 조회, 채팅방 관리 UI | 백예지 |
+| [#22](https://github.com/codyssey-ai/chatbot-api/pull/22) | `chore/21-render-deploy` | Render 배포 설정 | 정재윤 |
+| [#23](https://github.com/codyssey-ai/chatbot-api/pull/23) | `develop` → `main` | 릴리즈 — 최초 배포 | 정재윤 |
+| [#25](https://github.com/codyssey-ai/chatbot-api/pull/25) | `docs/24-readme-deploy-and-team` | 배포 반영, 팀 구성원 작성 | 정재윤 |
+
+전체 목록은 [Pull requests 탭](https://github.com/codyssey-ai/chatbot-api/pulls?q=is%3Apr)에서,
+커밋 이력은 [Commits](https://github.com/codyssey-ai/chatbot-api/commits/develop) 에서 확인할 수 있다.
+
+### 문서 ↔ 구현 대조
+
+README 의 설명이 실제 코드·이력과 맞는지 확인할 수 있는 지점이다.
+
+| README 항목 | 구현 | 관련 PR |
+|---|---|---|
+| 인증 방식 (HttpOnly 쿠키) | [`app/auth/`](app/auth/) | [#16](https://github.com/codyssey-ai/chatbot-api/pull/16) |
+| 문맥 유지 (체크포인터·요약) | [`app/chat/agent.py`](app/chat/agent.py) | [#18](https://github.com/codyssey-ai/chatbot-api/pull/18) |
+| 대화 로그 저장·조회 | [`app/chat/repository.py`](app/chat/repository.py) | [#18](https://github.com/codyssey-ai/chatbot-api/pull/18) |
+| 장애 처리 (타임아웃·폴백·409) | [`app/chat/service.py`](app/chat/service.py) | [#18](https://github.com/codyssey-ai/chatbot-api/pull/18) |
+| 채팅 화면·채팅방 UI | [`static/chat.js`](static/chat.js) | [#20](https://github.com/codyssey-ai/chatbot-api/pull/20) |
+| DB 스키마·RLS | [`scripts/schema.sql`](scripts/schema.sql) | [#8](https://github.com/codyssey-ai/chatbot-api/pull/8) |
+| 배포 설정 | [`render.yaml`](render.yaml) | [#22](https://github.com/codyssey-ai/chatbot-api/pull/22) |
+
+팀원별 커밋 수는 아래 명령으로 직접 확인할 수 있다.
+git 사용자 이름이 바뀐 경우가 있어 이메일 기준으로 집계한다.
+
+```bash
+git log --no-merges develop --format='%ae' | sort | uniq -c | sort -rn
+#   19 whyj102@gmail.com      백예지
+#   18 whitecy01@naver.com    정재윤
+#   14 stnguswnd@gmail.com    김현중
+```
 
 ---
 
