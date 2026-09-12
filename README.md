@@ -1,5 +1,10 @@
 # AI 챗봇 서비스
 
+**배포 주소 — https://chatbot-api-xihh.onrender.com**
+
+> 무료 플랜이라 15분 이상 요청이 없으면 대기 상태로 들어간다.
+> 첫 접속은 깨어나는 데 1분쯤 걸릴 수 있다.
+
 로그인한 사용자가 웹에서 질문하면 AI 가 답하고, 모든 대화가 DB 에 누적되는 서비스다.
 대화별로 문맥이 이어지며, 지난 대화를 언제든 다시 열어볼 수 있다.
 
@@ -122,7 +127,8 @@ curl -i -X POST localhost:8000/api/threads \
 | `Missing credentials` 로 기동 실패 | `.env` 의 `OPENAI_API_KEY` 가 비어 있다 |
 | `ValidationError` 로 기동 실패 | 필수 환경 변수가 빠졌다. 위 표의 **필수** 항목을 확인한다 |
 | DB 연결 타임아웃 | `DATABASE_URL` 이 Session pooler 주소인지, 비밀번호가 인코딩됐는지 확인한다 |
-| 회원가입/로그인이 동작하지 않음 | **정상이다.** 해당 라우터는 아직 구현 전이다 (아래 진행 상황 참고) |
+| 가입은 되는데 로그인이 안 됨 | Supabase → Authentication → Sign In / Providers → Email 에서 **Confirm email 을 끈다** |
+| 로그인 후 계속 `/login` 으로 돌아감 | 로컬은 HTTP 라 `COOKIE_SECURE=false` 여야 쿠키가 심긴다 |
 
 ---
 
@@ -276,7 +282,7 @@ Content-Type: application/json
 
 ## 배포
 
-배포 URL: *(배포 후 기재)*
+배포 URL: **https://chatbot-api-xihh.onrender.com**
 
 Render 에 GitHub 저장소를 연결한다. 빌드·시작 명령과 환경 변수 목록은
 [`render.yaml`](render.yaml) 에 정의되어 있어, Blueprint 로 가져오면 그대로 재현된다.
@@ -305,7 +311,7 @@ Python 버전은 [`.python-version`](.python-version) 으로 고정한다.
 
 1. `GET /health` 가 `{"status":"ok"}` 를 반환하는지
 2. 기동 로그에 `startup_complete main_model=... summary_model=...` 이 찍히는지
-3. Supabase → Authentication → URL Configuration 에 Render 도메인을 등록했는지
+3. Supabase → Authentication → Sign In / Providers → Email 에서 Confirm email 이 꺼져 있는지
 4. 회원가입 → 로그인 → 대화 전송이 배포 환경에서 동작하는지
 
 ### 유휴 정지 주의
@@ -322,35 +328,67 @@ Render 는 요청이 오면 스스로 깨어나지만, **Supabase 는 그렇지 
 `/health` 를 호출하면 DB 에 `SELECT 1` 이 나가 Render 와 Supabase 가 함께 깨어난다.
 
 ```bash
-curl -s https://<배포주소>/health
+curl -s https://chatbot-api-xihh.onrender.com/health
 ```
 
 ---
 
-## 진행 상황
+## 구현 현황
 
-현재 공통 기반은 완성되어 서버가 기동되고 화면이 렌더링된다.
-기능 라우터는 구현 전이라 회원가입·로그인·채팅은 아직 동작하지 않는다.
+모든 기능이 구현되어 배포까지 완료되었다.
 
 | 항목 | 상태 |
 |---|---|
 | 프로젝트 구조, 설정, 로깅, 예외 처리 | 완료 |
-| DB 스키마, RLS | 완료 |
-| LangGraph 에이전트 구성 | 완료 |
-| 화면 (회원가입·로그인·채팅) | 완료 |
-| 인증 (`get_current_user`, signup, login) | 진행 예정 |
-| 채팅방 CRUD, 메시지 전송 | 진행 예정 |
-| 배포 | 진행 예정 |
+| DB 스키마, 체크포인트 테이블 RLS | 완료 |
+| 인증 (회원가입 · 로그인 · 로그아웃 · 토큰 검증) | 완료 |
+| 채팅방 CRUD (생성 · 목록 · 제목 변경 · 삭제) | 완료 |
+| 멀티턴 메시지 전송, LangGraph 에이전트, 요약 미들웨어 | 완료 |
+| 대화 로그 저장 및 조회, 실패 로그 기록 | 완료 |
+| 장애 처리 (타임아웃 · 업스트림 실패 · 동시 요청 차단 · 모델 폴백) | 완료 |
+| 화면 (회원가입 · 로그인 · 채팅 · 채팅방 관리) | 완료 |
+| 배포 (Render) | 완료 |
 
 ---
 
 ## 팀 구성원 및 역할
 
-*(담당자 배정 후 작성)*
-
-| 이름 | 역할 | 주요 작업 |
+| 이름 | 역할 | 커밋 |
 |---|---|---|
-| | | |
+| 정재윤 ([@whitecy01](https://github.com/whitecy01)) | API · 공통 기반 | 18 |
+| 김현중 ([@stnguswnd](https://github.com/stnguswnd)) | AI 파이프라인 · 채팅 API | 14 |
+| 백예지 ([@yejibaek12](https://github.com/yejibaek12)) | 프론트엔드 | 19 |
+
+### 정재윤 — API · 공통 기반
+
+- 프로젝트 구조 설계. 기능별 패키지와 라우터 → 서비스 → 리포지토리 3계층 고정
+- 설정(`pydantic-settings`), DB 커넥션 풀, 구조화 로깅, 공통 예외 처리
+- 요청마다 `request_id` 를 발급해 모든 로그와 오류 응답에 싣는 미들웨어
+- Supabase 스키마 작성, 체크포인트 테이블 RLS 적용
+- 인증 API — 회원가입 · 로그인 · 로그아웃 · 토큰 검증. HttpOnly 쿠키 세션
+- Render 배포 설정(`render.yaml`)과 기동 로그 정정
+- 시스템 구조 문서, API 명세, 아키텍처 다이어그램, README
+
+### 김현중 — AI 파이프라인 · 채팅 API
+
+- 채팅방 CRUD API. 요청마다 소유권 확인, 삭제 시 체크포인트까지 정리
+- `thread_id` 기반 멀티턴 메시지 처리. 과거 대화는 체크포인터가 복구한다
+- LangGraph 에이전트 구성과 `SummarizationMiddleware` 요약 전략
+- 메인 · 요약 모델 분리, OpenAI 실패 시 Gemini 자동 폴백
+- 대화 로그 저장과 이력 조회. 실패도 `status='error'` 로 기록
+- 장애 처리 — AI 타임아웃(504), 업스트림 오류(502), 동일 대화 동시 요청 차단(409)
+- 설정 · 스키마 · 에이전트 · 리포지토리 · 서비스 테스트
+
+### 백예지 — 프론트엔드
+
+- 채팅 화면과 채팅방 목록 사이드바, 선택 상태 표시, 반응형 레이아웃
+- 채팅방 생성 · 제목 변경 · 삭제 UI
+- 이전 대화 복구. 요약되지 않은 원본이 필요해 `chat_logs` 를 읽는다
+- 채팅방 전환 시 경쟁 조건 처리 — 이전 응답 렌더링 방지, 이전 오류 무시,
+  전환 중 전송 차단, 404 응답 시 목록 갱신
+- 오류 안내 — 인증 만료 시 로그인 페이지 이동, 409 · 502 · 504 상황별 문구,
+  5xx 오류에 `request_id` 표시
+- `chat.js` 코드 구조 재배치
 
 ---
 
